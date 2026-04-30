@@ -8,7 +8,6 @@
 - 📱 **小程序**: uni-app跨平台，支持微信小程序
 - 🔍 **搜索**: 支持代码/名称搜索
 - ⏱ **自动刷新**: 每5秒更新行情
-- 💾 **缓存**: 300秒TTL，秒级响应
 
 ## 快速开始
 
@@ -23,13 +22,14 @@ python run_simple.py
 ### 一键启动（Windows）
 双击 `启动股票行情.bat`
 
-## 数据源
-- 股票列表：新浪财经API
-- 实时行情：同花顺API
-
 ## 项目结构
 ```
 backend/        # FastAPI后端
+  app/
+    main_simple.py  # 简化版入口（当前使用）
+    main.py         # 完整版入口（需数据库）
+    static/
+      index.html    # H5股票行情网页
 miniapp/        # uni-app小程序
 启动股票行情.bat  # 一键启动脚本
 ```
