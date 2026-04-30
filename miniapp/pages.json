@@ -1,0 +1,7 @@
+{
+  "pages": [{
+    "path": "pages/index/index",
+    "style": { "navigationBarTitleText": "股票行情", "navigationBarBackgroundColor": "#1a1a2e", "navigationBarTextStyle": "white", "backgroundColor": "#0f0f23" }
+  }],
+  "globalStyle": { "backgroundColor": "#0f0f23" }
+}
