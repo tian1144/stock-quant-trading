@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>股票行情 - 实时数据</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #0f0f23; color: #fff; min-height: 100vh; }
+    .header { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); padding: 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #2a2a4a; }
+    .header h1 { font-size: 20px; color: #e94560; }
+    .header .status { font-size: 13px; color: #888; }
+    .header .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #0be881; margin-right: 6px; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+    .toolbar { padding: 12px 20px; display: flex; gap: 10px; background: #12122b; border-bottom: 1px solid #2a2a4a; }
+    .search-input { flex:1; padding:10px 18px; border-radius:25px; border:1px solid #2a2a4a; background:#1a1a2e; color:#fff; font-size:14px; outline:none; }
+    .search-input:focus { border-color:#e94560; }
+    .search-input::placeholder { color:#555; }
+    .btn { padding:10px 20px; border-radius:25px; border:none; cursor:pointer; font-size:14px; font-weight:500; }
+    .btn-primary { background:#e94560; color:#fff; }
+    .btn-primary:hover { background:#d63851; }
+    .btn-secondary { background:#2a2a4a; color:#ccc; }
+    .btn-secondary:hover { background:#3a3a5a; }
+    .stats-bar { padding:10px 20px; display:flex; justify-content:space-between; background:#12122b; border-bottom:1px solid #2a2a4a; font-size:13px; color:#888; }
+    .count { color:#e94560; font-weight:bold; }
+    .table-container { overflow-x:auto; }
+    table { width:100%; border-collapse:collapse; }
+    thead th { background:#16213e; padding:12px 16px; text-align:left; font-size:13px; color:#888; position:sticky; top:0; }
+    thead th:nth-child(2),thead th:nth-child(3){text-align:right}
+    tbody tr { border-bottom:1px solid rgba(42,42,74,0.5); cursor:pointer; }
+    tbody tr:hover { background:#1a1a3e; }
+    tbody td { padding:12px 16px; font-size:14px; }
+    td:nth-child(2),td:nth-child(3){text-align:right;font-weight:bold;font-family:monospace}
+    .stock-name { color:#fff; font-weight:500; }
+    .stock-code { color:#666; font-size:12px; }
+    .price-up { color:#e94560; }
+    .price-down { color:#0be881; }
+    .price-flat { color:#888; }
+    .change-badge { display:inline-block; padding:3px 10px; border-radius:6px; font-size:13px; font-weight:600; }
+    .change-badge.up { background:rgba(233,69,96,0.15); color:#e94560; }
+    .change-badge.down { background:rgba(11,232,129,0.15); color:#0be881; }
+    .change-badge.flat { background:rgba(136,136,136,0.15); color:#888; }
+    .load-more { text-align:center; padding:20px; cursor:pointer; color:#888; }
+    .load-more:hover { color:#fff; }
+    .loading { text-align:center; padding:40px; color:#888; }
+    .spinner { display:inline-block; width:24px; height:24px; border:3px solid #2a2a4a; border-top-color:#e94560; border-radius:50%; animation:spin 1s linear infinite; margin-right:10px; vertical-align:middle; }
+    @keyframes spin { to{transform:rotate(360deg)} }
+    .empty { text-align:center; padding:60px 20px; color:#555; }
+    .footer { padding:20px; text-align:center; color:#444; font-size:12px; border-top:1px solid #2a2a4a; }
+    @media(max-width:768px){.header{flex-direction:column;gap:8px}.toolbar{flex-direction:column}thead th,tbody td{padding:10px 12px;font-size:13px}}
+  </style>
+</head>
+<body>
+  <div class="header"><h1>📈 股票行情</h1><div class="status"><span class="dot"></span><span id="statusText">实时数据 · 每5秒刷新</span></div></div>
+  <div class="toolbar">
+    <input class="search-input" id="searchInput" placeholder="输入股票代码或名称搜索..." onkeydown="if(event.key==='Enter')doSearch()">
+    <button class="btn btn-primary" onclick="doSearch()">搜索</button>
+    <button class="btn btn-secondary" onclick="clearSearch()">重置</button>
+  </div>
+  <div class="stats-bar"><span>共 <span class="count" id="totalCount">0</span> 只股票</span><span id="lastUpdate">最后更新：--</span></div>
+  <div class="table-container"><table><thead><tr><th>股票名称/代码</th><th>最新价</th><th>涨跌幅</th></tr></thead><tbody id="stockTableBody"><tr><td colspan="3"><div class="loading"><span class="spinner"></span>正在加载数据...</div></td></tr></tbody></table></div>
+  <div class="load-more" id="loadMoreBtn" style="display:none" onclick="loadMore()">点击加载更多</div>
+  <div class="footer">数据来源：新浪财经 · 仅供参考，不构成投资建议</div>
+  <script>
+    var S={stocks:[],pageSize:50,page:1,kw:'',loading:!1};
+    function FP(p){return p&&p!==0?p.toFixed(2):'--'}
+    function FC(c){if(c==null)return'--';if(c===0)return'0.00%';return(c>0?'+':'')+c.toFixed(2)+'%'}
+    function GC(c){return!c||c===0?'flat':c>0?'up':'down'}
+    async function load(){
+      if(S.loading)return;S.loading=!0;
+      try{var r=await fetch('/api/v1/stocks?limit=10000&offset=0'),d=await r.json();
+        if(d&&d.stocks){S.stocks=d.stocks;S.page=1;render();document.getElementById('totalCount').textContent=d.total;document.getElementById('lastUpdate').textContent='最后更新：'+new Date().toLocaleTimeString()}
+      }catch(e){document.getElementById('stockTableBody').innerHTML='<tr><td colspan="3"><div class="empty">加载失败</div></td></tr>'}
+      S.loading=!1;
+    }
+    function render(){
+      var tb=document.getElementById('stockTableBody'),st=S.kw?S.stocks:S.stocks.slice(0,S.page*S.pageSize);
+      if(!st.length){tb.innerHTML='<tr><td colspan="3"><div class="empty">暂无数据</div></td></tr>';document.getElementById('loadMoreBtn').style.display='none';return}
+      var h='';
+      for(var i=0;i<st.length;i++){var s=st[i],c=GC(s.pct_change);h+='<tr><td><div class="stock-name">'+s.name+'</div><div class="stock-code">'+s.code+'</div></td><td class="price-'+c+'">'+FP(s.price)+'</td><td><span class="change-badge '+c+'">'+FC(s.pct_change)+'</span></td></tr>'}
+      tb.innerHTML=h;
+      var b=document.getElementById('loadMoreBtn');b.style.display=!S.kw&&S.page*S.pageSize<S.stocks.length?'block':'none';
+    }
+    function loadMore(){S.page++;render()}
+    function doSearch(){
+      var k=document.getElementById('searchInput').value.trim().toLowerCase();
+      if(!k){S.kw='';render();return}
+      S.kw=k;var r=[];
+      for(var i=0;i<S.stocks.length;i++){var s=S.stocks[i];if(s.code.toLowerCase().indexOf(k)!==-1||s.name.toLowerCase().indexOf(k)!==-1)r.push(s)}
+      var tb=document.getElementById('stockTableBody');
+      if(r.length){var h='';for(var j=0;j<r.length;j++){var x=r[j],c=GC(x.pct_change);h+='<tr><td><div class="stock-name">'+x.name+'</div><div class="stock-code">'+x.code+'</div></td><td class="price-'+c+'">'+FP(x.price)+'</td><td><span class="change-badge '+c+'">'+FC(x.pct_change)+'</span></td></tr>'}tb.innerHTML=h;document.getElementById('loadMoreBtn').style.display='none';document.getElementById('totalCount').textContent=r.length}
+      else tb.innerHTML='<tr><td colspan="3"><div class="empty">未找到匹配的股票</div></td></tr>';
+    }
+    function clearSearch(){document.getElementById('searchInput').value='';S.kw='';S.page=1;load()}
+    document.addEventListener('DOMContentLoaded',function(){load();setInterval(load,5000)});
+  </script>
+</body>
+</html>
