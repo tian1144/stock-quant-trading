@@ -1,0 +1,613 @@
+{
+  "version": "short-hunter-memory-v1",
+  "updated_at": "2026-05-04 01:48:43",
+  "scope": "A股短线研究、模拟盘复盘、AI选股质量打分",
+  "principles": [
+    "先做模拟盘和研究判断，不允许绕过风控直接真实下单。",
+    "短线不是追高冲动，优先寻找低位箱体、回落支撑、资金重新确认的机会。",
+    "AI必须能解释买点、等待原因、失效条件和风控证据，不能只给结论。",
+    "样本不足时使用中性判断，不把偶然盈利当作有效规律。",
+    "公告、问询函、减持、诉讼、审计非标、业绩雷属于硬风险源，宁可错过也不硬买。"
+  ],
+  "short_term_playbook": {
+    "preferred_setups": [
+      "箱体震荡后回落到支撑位，未破位，近5日不过热。",
+      "板块有资金或新闻催化，但个股未处在连续加速高位。",
+      "主力/大单边际改善，同时散户压力没有明显升高。",
+      "历史相似规则有效性为 ready 且胜率、平均收益、回撤结构较好。",
+      "成交额足够、换手适中，避免极低流动性和过度换手。"
+    ],
+    "avoid_setups": [
+      "连续大涨后才出现利好解释，容易是兑现而不是新买点。",
+      "高换手、高量比、散户占比上升但主力净流出。",
+      "公告风险命中问询、减持、诉讼、审计非标或业绩大幅下滑。",
+      "龙虎榜或资金异动只有单日脉冲，次日承接不足。",
+      "历史相似样本少、止损命中率高、平均收益为负。"
+    ],
+    "entry_rules": [
+      "优先支撑位附近、缩量回落后放量确认的低吸点。",
+      "若涨幅已偏高，必须等待回踩或分时承接确认，不追秒板。",
+      "买入计划必须给出建议时间、挂单价、止损价、失效条件。"
+    ],
+    "exit_rules": [
+      "短线先保护本金，跌破结构支撑或风控一票否决则退出模拟观察。",
+      "若达到目标但量价背离、主力转流出，优先减仓或结束模拟单。",
+      "涨停/连板类机会必须额外检查开板次数、封单强度和次日承接。"
+    ]
+  },
+  "data_sources_to_prefer": [
+    {
+      "name": "AkShare 龙虎榜接口",
+      "usage": "后续用于营业部席位、机构席位、个股上榜统计和游资行为观察。",
+      "interfaces": [
+        "stock_lhb_detail_daily_sina",
+        "stock_lhb_ggtj_sina",
+        "stock_lhb_yytj_sina",
+        "stock_lhb_jgzz_sina",
+        "stock_lhb_jgmx_sina"
+      ],
+      "source_url": "https://akshare.akfamily.xyz/tutorial.html"
+    },
+    {
+      "name": "AkShare/东方财富涨停池",
+      "usage": "后续用于涨停、连板、封板强度、炸板和短线情绪观察。",
+      "interfaces": [
+        "stock_zt_pool_em",
+        "stock_zt_pool_previous_em",
+        "stock_dt_pool_em"
+      ],
+      "source_url": "https://blog.csdn.net/myqijin/article/details/144425164"
+    },
+    {
+      "name": "开源 A 股策略系统参考",
+      "usage": "参考其 AkShare 抓取、指标计算、K线形态识别、策略回测和多 Agent 思路，不直接复制代码。",
+      "projects": [
+        "https://github.com/ethqunzhong/InStock",
+        "https://github.com/oficcejo/aiagents-stock"
+      ]
+    }
+  ],
+  "factor_learning_policy": {
+    "can_adjust": [
+      "historical_rule",
+      "support_pullback",
+      "capital_flow",
+      "retail_institution_flow",
+      "news",
+      "disclosure_risk",
+      "volume_turnover",
+      "sector_momentum"
+    ],
+    "adjustment_rules": [
+      "只允许基于模拟盘日志和足够样本提出调参建议。",
+      "每次单因子权重调整建议不超过 2 个百分点。",
+      "新权重先作为 B 策略模拟验证，不直接替换主策略。",
+      "如果样本少于 30 笔，最多只能给观察建议，不能升级为正式权重。",
+      "亏损复盘要区分选股错误、买点错误、卖点错误、风控错误和数据缺失。"
+    ],
+    "hard_limits": {
+      "max_single_factor_weight_pct": 25,
+      "min_core_risk_weight_pct": 8,
+      "max_position_without_manual_confirm_pct": 0,
+      "live_trading_default": "disabled"
+    }
+  },
+  "review_questions": [
+    "这只票是低位支撑确认，还是高位追涨解释？",
+    "主力与散户结构是否支持短线承接？",
+    "公告/财报/监管风险有没有一票否决项？",
+    "历史相似规则是否有足够样本，胜率和回撤是否匹配？",
+    "如果买错，哪个条件触发退出？"
+  ],
+  "learning_notes": [
+    {
+      "created_at": "2026-05-04 01:48:43",
+      "type": "youzi_video_frame_ocr_lessons_v1",
+      "title": "游资视频关键帧OCR精华 v1",
+      "source_report": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\video_frame_ocr_report.json",
+      "coverage": {
+        "sampled_videos": 8,
+        "usable_videos": 8,
+        "total_chars": 21392,
+        "theme_counts": {
+          "盘中异动": 1,
+          "热点龙头": 7,
+          "低吸买点": 4,
+          "纪律止损": 1,
+          "建仓出货": 1,
+          "情绪周期": 1
+        }
+      },
+      "takeaways": [
+        "视频资料优先强化短线过程判断：盘中异动、热点板块、龙头辨识、低吸位置、仓位纪律和系统化止损。",
+        "盘中异动不是单看涨速，要结合板块联动、前排辨识度、资金承接和是否出现新主线来判断。",
+        "低吸买点更重视共振位置：热点未死、龙头或前排回到关键均线/支撑附近、分时恐慌释放后有承接。",
+        "止损和仓位纪律应作为 AI 打分硬约束：买错后先判断是选股错、买点错、情绪周期错，不能靠补仓掩盖错误。",
+        "建仓、拉升、出货课程只作为盘口行为理解，不等于能预测单一主力行为；AI 必须用数据和风控交叉验证。"
+      ],
+      "factor_adjustments": [
+        "ai_quality_scoring 中的 youzi_experience 可加强 watch_tape、leader_hotspot、entry_setup、exit_risk 四类标签。",
+        "当候选股只有个股异动、没有板块共振和主线确认时，热点龙头因子应降权或标记为 watch_only。",
+        "当候选股处在5日/10日线附近低吸形态，但公告风险或情绪周期不支持时，只能进入观察池，不直接推荐购买。"
+      ],
+      "video_summaries": [
+        {
+          "video_id": "video-0020",
+          "relative_path": "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\13.《短线游资热点龙头战法》共40集\\10.如何精准发现盘中异动，自下而上挖掘新的热点板块和龙头股.mp4",
+          "themes": [
+            "盘中异动",
+            "热点龙头"
+          ],
+          "ocr_char_count": 2657
+        },
+        {
+          "video_id": "video-0036",
+          "relative_path": "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\13.《短线游资热点龙头战法》共40集\\27.短线热点龙头战法第六招共振低吸买入法.mp4",
+          "themes": [
+            "热点龙头",
+            "低吸买点"
+          ],
+          "ocr_char_count": 1457
+        },
+        {
+          "video_id": "video-0048",
+          "relative_path": "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\13.《短线游资热点龙头战法》共40集\\39.短线游资热点龙头战法操作纪律第二讲系统化止损原则.mp4",
+          "themes": [
+            "热点龙头",
+            "纪律止损"
+          ],
+          "ocr_char_count": 1802
+        },
+        {
+          "video_id": "video-0035",
+          "relative_path": "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\13.《短线游资热点龙头战法》共40集\\26.短线热点龙头战法第五招针尖低吸买入法.avi",
+          "themes": [
+            "热点龙头",
+            "低吸买点"
+          ],
+          "ocr_char_count": 1243
+        },
+        {
+          "video_id": "video-0012",
+          "relative_path": "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\08.《解密游资股市生存法则》共2集\\02.游资建仓、拉升、出货细节.flv",
+          "themes": [
+            "建仓出货"
+          ],
+          "ocr_char_count": 9311
+        },
+        {
+          "video_id": "video-0037",
+          "relative_path": "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\13.《短线游资热点龙头战法》共40集\\28.短线热点龙头战法第七招靠近5天线低吸买入法.mp4",
+          "themes": [
+            "热点龙头",
+            "低吸买点"
+          ],
+          "ocr_char_count": 1544
+        },
+        {
+          "video_id": "video-0038",
+          "relative_path": "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\13.《短线游资热点龙头战法》共40集\\29.短线热点龙头战法第八招靠近10天线低吸买入法.mp4",
+          "themes": [
+            "热点龙头",
+            "低吸买点"
+          ],
+          "ocr_char_count": 2182
+        },
+        {
+          "video_id": "video-0016",
+          "relative_path": "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\13.《短线游资热点龙头战法》共40集\\05.如何把握龙头股的情绪周期，抓住热点板块龙头的买卖时机上.mp4",
+          "themes": [
+            "热点龙头",
+            "情绪周期"
+          ],
+          "ocr_char_count": 1196
+        }
+      ]
+    },
+    {
+      "created_at": "2026-05-04 01:27:06",
+      "type": "trade_review_candidate_schema_v1",
+      "title": "交割单复盘候选表与AI学习边界 v1",
+      "candidate_json": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\trade_review_candidates.json",
+      "candidate_csv": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\trade_review_candidates.csv",
+      "coverage": {
+        "row_count": 221,
+        "status_counts": {
+          "needs_human_check": 127,
+          "low_quality_reprocess": 14,
+          "lesson_summary_available": 80
+        },
+        "category_counts": {
+          "退学炒股": 7,
+          "赵老哥": 12,
+          "凡倍无名": 81,
+          "其他": 59,
+          "BJ炒家": 11,
+          "轮回666": 5,
+          "华东大导弹": 1,
+          "陈小群": 22,
+          "善行天助": 23
+        }
+      },
+      "takeaways": [
+        "OCR/PDF交割单已转成候选复盘表，但候选字段不是事实；AI只能把它们作为复盘线索，不能直接当成买卖流水。",
+        "正式学习胜率和权重前，必须经过人工或高置信结构化确认，至少确认日期、标的、买卖方向、仓位变化、盈亏和卖出原因。",
+        "复盘表的核心价值是训练AI问对问题：买点类别、是否符合计划、次日是否验证、亏损属于选股/买点/卖点/风控/数据哪一类。",
+        "低质量OCR、扫描PDF和异常PDF进入增强队列，不参与量化权重调整，只能提醒后续补数。"
+      ],
+      "review_schema": {
+        "required_before_training": [
+          "trade_date",
+          "code",
+          "name",
+          "side",
+          "setup_type",
+          "entry_reason",
+          "exit_reason",
+          "pnl_pct_or_amount",
+          "plan_followed",
+          "next_day_validation",
+          "loss_reason",
+          "source_confidence"
+        ],
+        "allowed_setup_types": [
+          "low_suck",
+          "halfway",
+          "limit_board",
+          "reseal",
+          "leader_follow",
+          "watch_only"
+        ],
+        "allowed_loss_reasons": [
+          "stock_selection",
+          "entry_timing",
+          "exit_timing",
+          "risk_control",
+          "market_emotion",
+          "data_missing",
+          "unknown"
+        ]
+      },
+      "factor_adjustments": [
+        "AI质量打分可以引用 trade_review_candidates 的模式标签，但不得用未校验的OCR盈亏数据调整权重。",
+        "当后续 paper_trade_log.csv 形成已验证交易样本后，才允许按至少30笔样本提出因子权重微调建议。",
+        "如果连续亏损样本被标记为 entry_timing 或 market_emotion，youzi_experience 中的盘口承接和情绪周期权重应优先复核。"
+      ],
+      "implementation_hooks": [
+        "前端后续增加交割单校验页，读取 trade_review_candidates.csv，人工确认后再写入 verified_trade_reviews.csv。",
+        "verified_trade_reviews.csv 再与 paper_trade_log.csv 合并，用于日报、周报和AI复盘。",
+        "AI对话中回答交割单问题时，要主动区分 OCR候选、PDF原则、已验证模拟交易 三类证据。"
+      ]
+    },
+    {
+      "created_at": "2026-05-04 01:09:46",
+      "type": "youzi_image_ocr_digest_v1",
+      "title": "游资图片交割单OCR精华 v1",
+      "source_root": "E:\\迅雷\\下载目录\\游资交割单",
+      "pdf_image_report": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\pdf_image_extraction_report.json",
+      "ocr_report": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\image_ocr\\windows_ocr_report.json",
+      "coverage": {
+        "image_count": 229,
+        "ocr_attempted": 141,
+        "usable_ocr_count": 127,
+        "low_quality_count": 14,
+        "category_counts": {
+          "退学炒股": 3,
+          "凡倍无名": 51,
+          "其他": 13,
+          "BJ炒家": 11,
+          "轮回666": 5,
+          "陈小群": 21,
+          "善行天助": 23
+        },
+        "pdf_text_extracted": 258,
+        "scanned_pdf_needs_ocr": 87
+      },
+      "ocr_quality_note": "Windows OCR 可识别表格日期和部分文字，但小字号证券代码/买卖方向/金额仍有误识别，暂不把图片OCR直接转为精确逐笔交易流水。",
+      "observations": [
+        "可用OCR图片 127 张，多数来自退学炒股、BJ炒家、轮回666、善行天助、陈小群等实盘/交割单截图。",
+        "可识别的表格型图片约 31 张，日期字段命中约 1104 次，但存在 2019 被识别为 20四/201g 的问题。",
+        "图片交割单更适合先沉淀为复盘数据结构：交易日期、标的、买卖方向、仓位变化、盈亏、次日处理、是否符合预案。",
+        "当前 OCR 不适合直接生成 paper_trade_log.csv 的精确金额流水；需要更强表格 OCR 或人工校正后再写入正式模拟训练集。"
+      ],
+      "takeaways": [
+        "实盘交割单的价值不只在单笔盈亏，而在连续交易中的仓位变化和错误修正：连续亏损应自动降低 AI 的激进评分。",
+        "图片交割单强化了“交易后验标签”的重要性：买点类别、是否按计划卖出、次日承接是否验证、是否因为情绪退潮亏损。",
+        "AI 学习交割单时必须区分可验证交易数据和 OCR 噪声；低置信度字段只能进入备注，不能参与权重训练。",
+        "后续正式训练应先建立人工可校验的 trade_review schema，再从 OCR 中抽取候选字段供人工确认。"
+      ],
+      "factor_adjustments": [
+        "youzi_experience 继续保留仓位纪律权重；当模拟盘出现连续亏损或 OCR/交割单复盘标记为买点错误时，自动降低 position_advice。",
+        "新增后续字段建议：trade_setup_type、plan_followed、next_day_validation、loss_reason、ocr_confidence。",
+        "AI 质量打分不得把 OCR 低置信度文本当作事实；只有人工确认或结构化解析置信度足够时才允许影响分数。"
+      ],
+      "implementation_hooks": [
+        "建立 paper_trade_log.csv 后，将 OCR 图片作为候选证据来源而不是最终真值。",
+        "为图片OCR增加人工校验页：原图、OCR文本、可编辑交易字段、保存到训练日志。",
+        "扫描PDF 87 份和低质量图片 14 张进入增强OCR队列，可后续尝试 Tesseract/PaddleOCR 或版面表格识别。"
+      ]
+    },
+    {
+      "created_at": "2026-05-04 01:02:27",
+      "type": "youzi_pdf_text_digest_v1",
+      "title": "游资PDF文字资料精华 v1",
+      "source_root": "E:\\迅雷\\下载目录\\游资交割单",
+      "extraction_report": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\pdf_image_extraction_report.json",
+      "coverage": {
+        "pdf_count": 395,
+        "text_extracted": 258,
+        "needs_ocr_or_scanned_pdf": 87,
+        "pdf_error": 50,
+        "image_count": 229,
+        "image_ocr_queued": 141
+      },
+      "documents_sampled": [
+        "64位游资\\28位游资悟道心法\\01、炒股养家_洞悉情绪周期\\炒股养家干货合集  共62页.pdf",
+        "64位游资\\28位游资悟道心法\\23、令胡冲_盘感训练及打板技术\\令胡冲-实盘贴-问答整理.pdf",
+        "64位游资\\28位游资悟道心法\\27、乔帮主_低吸之王\\乔帮主最全精华合集.pdf",
+        "64位游资\\28位游资悟道心法\\22、瑞鹤仙_熊市出英雄\\淘县大师传之--瑞鹤仙干货合集 PDF文章.pdf",
+        "64位游资\\28位游资悟道心法\\24、凡倍无名\\10金币【凡倍无名】超短作手凡倍无名-超短百科全书 PDF电子书146页.pdf",
+        "64位游资\\9位顶级顶级游资龙虎榜解密电子资料\\01.顶级游资\\乔帮主\\顶级游资乔帮主最全精华合集.pdf",
+        "64位游资\\9位顶级顶级游资龙虎榜解密电子资料\\赠品：游资概念题材电子书\\机会主义-解密游资的股市生存法则.pdf",
+        "游资大佬-炒股养家交割单\\淘县大师传之炒股养家干货合集62P.pdf",
+        "64位游资\\9位顶级顶级游资龙虎榜解密电子资料\\05.其它文章\\凡倍无名\\【凡倍无名】 股票作手笔记培训 第五期培训资料\\【凡倍无名】（群主整理）股票作手讲义及答疑汇总2018.12.02.pdf",
+        "64位游资\\9位顶级顶级游资龙虎榜解密电子资料\\05.其它文章\\凡倍无名\\【凡倍无名】 股票作手笔记培训 第五期培训资料\\【凡倍无名】股票作手讲义及答疑汇总2018.11.19.pdf",
+        "64位游资\\9位顶级顶级游资龙虎榜解密电子资料\\05.其它文章\\凡倍无名\\超短作手凡倍无名-超短百科全书 PDF电子书146页.pdf",
+        "64位游资\\9位柚子悟道心得《精英版》\\著名游资悟道心得   精英版.pdf",
+        "64位游资\\9位柚子悟道心得《进阶版》\\著名游资悟道心得  进阶版.pdf",
+        "28-涅槃重生-合集\\涅盘重升-合集\\涅盘重升-5年实盘记录\\涅盘重升实盘2018年下半年.pdf",
+        "28-涅槃重生-合集\\涅盘重升-合集\\涅盘重升-5年实盘记录\\涅盘重升实盘2017年下半年.pdf",
+        "64位游资\\28位游资悟道心法\\17、万法归宗_市场永远是对的\\万法归宗_市场永远是对的.pdf",
+        "64位游资\\9位顶级顶级游资龙虎榜解密电子资料\\05.其它文章\\凡倍无名\\【凡倍无名】 股票作手笔记培训 第五期培训资料\\【凡倍无名】股票作手讲义及答疑汇总2018.12.02.pdf",
+        "64位游资\\28位游资悟道心法\\03、退学炒股心法_一万到千万的蜕变\\退学炒股超短打板的心法与精髓 共171页.pdf",
+        "64位游资\\28位游资悟道心法\\08、赵老哥_短线选股要诀\\【赵老哥】赵老哥交割单全集.pdf",
+        "28-涅槃重生-合集\\涅盘重升-合集\\涅盘重升-5年实盘记录\\涅盘重升实盘2017年上.pdf"
+      ],
+      "theme_hit_totals": {
+        "emotion_cycle": 993,
+        "leader_sector": 2453,
+        "entry_timing": 3226,
+        "exit_timing": 415,
+        "position_risk": 1598,
+        "disclosure_news": 404,
+        "lhb_review": 822,
+        "market_tape": 575
+      },
+      "takeaways": [
+        "PDF资料进一步强化了“赚钱效应优先”的短线框架：先判断昨日涨停、连板高度、主线延续和亏钱效应，再决定是否出手。",
+        "龙头/前排不是标签，而是由板块带动性、辨识度、承接强度和次日溢价共同确认；无跟风、无成交、无持续性的单股异动要降权。",
+        "低吸资料强调模式边界：低吸必须发生在主线仍未证伪、回落到关键支撑、恐慌释放后承接出现的位置，不能把下跌趋势硬解释成低吸。",
+        "打板/半路资料强调确定性来自情绪和盘口，不来自冲动；缩量一字、高位秒板、烂板弱回封都要区分处理。",
+        "仓位资料强调回撤控制优先级高于收益追逐：亏损期减频减仓，连续判断错误时暂停交易并复盘，不允许 AI 自动加码。",
+        "实盘记录和问答资料强化复盘纪律：每天记录买入理由、预期、次日验证、失败条件和卖出执行，而不是只记录盈亏。"
+      ],
+      "factor_adjustments": [
+        "youzi_experience 中增加对赚钱效应/亏钱效应的解释权重：市场退潮或昨日涨停无溢价时，即使个股支撑形态好也应降级。",
+        "leader_status 不能只看所属板块涨幅，应结合前排排名、板块跟随数量、连板高度、次日承接和成交额。",
+        "entry_timing 应区分低吸、半路、打板、回封四类买点；AI 质量分必须说明当前候选属于哪类买点，若无法归类则只观察。",
+        "position_advice 应受情绪周期和连续交易表现约束，模拟盘亏损期自动降到观察/小仓，不让单只高分票绕过仓位纪律。",
+        "AI 复核理由中必须说明预期和证伪条件：买入后哪种盘口/板块/情绪表现说明判断失败。"
+      ],
+      "avoid_rules": [
+        "把所有强势股都叫龙头。",
+        "把所有回调都叫低吸。",
+        "只因名人席位、PDF心法或历史战绩出现就提高买入评级。",
+        "只看买点不看卖点和次日验证。",
+        "在亏钱效应扩散时扩大候选池或提高仓位。"
+      ],
+      "implementation_hooks": [
+        "后续 OCR 图片交割单后，优先抽取日期、股票、买卖方向、金额、盈亏和次日处理，用于 paper_trade_log.csv 复盘标签。",
+        "AI 选股输出中加入买点类别字段：low吸/halfway/limit_board/reseal/watch_only。",
+        "短线日报增加赚钱效应字段：涨停数、炸板率、昨日涨停红盘率、连板高度和跌停数。",
+        "模拟交易日志完成后，把每笔交易与 youzi_experience 的情绪/主线/盘口/仓位判断做命中率统计。"
+      ]
+    },
+    {
+      "created_at": "2026-05-04 00:23:23",
+      "type": "youzi_trade_sheet_digest_v1",
+      "title": "游资交割单与短线课程抽取精华 v1",
+      "source_root": "E:\\迅雷\\下载目录\\游资交割单",
+      "extraction_report": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\youzi_extraction_report.json",
+      "coverage": {
+        "total_files_scanned": 880,
+        "parsed_structured_documents": 134,
+        "file_count_by_type": {
+          ".1": 1,
+          ".avi": 6,
+          ".doc": 22,
+          ".docx": 118,
+          ".flv": 2,
+          ".jpg": 66,
+          ".m4a": 1,
+          ".mp3": 2,
+          ".mp4": 76,
+          ".pdf": 395,
+          ".png": 163,
+          ".ppt": 1,
+          ".pptx": 14,
+          ".tne": 1,
+          ".txt": 1,
+          ".xls": 7,
+          ".xlsx": 2,
+          ".zip": 2
+        },
+        "deferred": "PDF、图片、视频、音频、旧版 xls/doc/ppt 本轮未做 OCR/转写；后续可单独建解析任务。"
+      },
+      "documents_sampled": [
+        "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\赠品：《从小散到游资的49堂课》音频\\09.风险控制：所有高手都重视的问题\\9-29短线的仓位管理中.docx",
+        "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\赠品：《从小散到游资的49堂课》音频\\09.风险控制：所有高手都重视的问题\\9-30短线的仓位管理下.docx",
+        "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\赠品：《从小散到游资的49堂课》音频\\09.风险控制：所有高手都重视的问题\\9-28短线的仓位管理上.docx",
+        "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\赠品：《从小散到游资的49堂课》音频\\07.看盘：实战必须了解的技巧\\我短线博弈的21条军规（学员特供0822）.docx",
+        "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\赠品：《从小散到游资的49堂课》音频\\07.看盘：实战必须了解的技巧\\7-21短线看盘的三大原则(1).docx",
+        "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\赠品：《从小散到游资的49堂课》音频\\06.公告战法：短线牛股的大金矿\\6-20公告战法下.docx",
+        "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\赠品：《从小散到游资的49堂课》音频\\06.公告战法：短线牛股的大金矿\\6-19公告战法上.docx",
+        "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\赠品：《从小散到游资的49堂课》音频\\04.被99%的人误解的龙头战法\\4-15不同运行模式龙头股的实战案例.docx",
+        "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\赠品：《从小散到游资的49堂课》音频\\08.让我们发现机会、规律、自我的神器：复盘\\8-27龙虎榜和交割单.docx",
+        "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\赠品：《从小散到游资的49堂课》音频\\02.一切牛股的终极驱动力：题材\\2-5短线牛股的驱动力.docx",
+        "64位游资\\28位游资悟道心法\\02、一线游资Asking心法_短线节奏的把握\\A股之神Asking语录.docx",
+        "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\赠品：《从小散到游资的49堂课》音频\\04.被99%的人误解的龙头战法\\【学员特供0803】新的埋伏机会在哪里.docx",
+        "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\赠品：《从小散到游资的49堂课》音频\\04.被99%的人误解的龙头战法\\4-14龙头股战法的最佳出场技巧.docx",
+        "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\赠品：《从小散到游资的49堂课》音频\\04.被99%的人误解的龙头战法\\涨价主线的再梳理（学员特供7月31日）.docx",
+        "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\赠品：《从小散到游资的49堂课》音频\\04.被99%的人误解的龙头战法\\4-13操作龙头战法的五大步骤.docx",
+        "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\赠品：《从小散到游资的49堂课》音频\\07.看盘：实战必须了解的技巧\\7-24快速提升看盘能力的训练方法.docx",
+        "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\赠品：《从小散到游资的49堂课》音频\\04.被99%的人误解的龙头战法\\后期进攻方向（学员特供0806）.docx",
+        "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\赠品：《从小散到游资的49堂课》音频\\07.看盘：实战必须了解的技巧\\7-23看盘的六大技巧.docx"
+      ],
+      "theme_hit_totals": {
+        "emotion_cycle": 922,
+        "leader_sector": 3462,
+        "entry_timing": 2029,
+        "exit_timing": 248,
+        "position_risk": 817,
+        "disclosure_news": 591,
+        "lhb_review": 334,
+        "market_tape": 600
+      },
+      "takeaways": [
+        "短线核心不是预测，而是围绕情绪周期、主线板块、龙头辨识度和承接强弱做概率选择；市场否认预判时必须立刻降级。",
+        "仓位应跟随赢面变化：赢面不足时空仓或小仓观察，只有情绪、板块、个股、风控同时确认时才允许提高模拟仓位。",
+        "公告和公开信息能制造短线机会，但公告战法必须先看市场氛围、板块联动、前排强度和次日承接，不能只因利好买入。",
+        "龙虎榜和交割单复盘重点不是崇拜席位，而是拆解买入位置、买入时点、题材级别、卖出纪律和亏损处理。",
+        "看盘要优先识别全市场情绪、涨跌家数、昨日涨停红盘率、板块攻击数量、连板高度、封板/炸板质量，而不是只盯单股分时。",
+        "亏损交易的处理决定短线水平：跌破计划、低于预期、情绪退潮或主力转弱时，先承认错误，禁止用补仓掩盖判断失败。"
+      ],
+      "factor_adjustments": [
+        "AI质量打分中提高 emotion_cycle、sector_momentum、leader_status、market_tape_confirmation 的解释权重，但必须受 disclosure_risk 和 risk_review 约束。",
+        "对公告/消息驱动票增加 market_breadth、yesterday_limit_up_red_rate、sector_limit_up_count、consecutive_limit_up_count 等短线氛围校验。",
+        "对疑似龙头票增加 leader_identification、sector_follow_strength、first_divergence_repair、next_day_acceptance 字段；没有板块跟随的单股脉冲降权。",
+        "对低吸支撑池继续保留 support_pullback，但若市场情绪退潮、板块无主线或大单承接不足，应只进观察池不进推荐池。",
+        "仓位建议由 AI 分数和赢面共同决定：低于60%只观察，60%-70%小仓，70%-80%中低仓，80%以上也只允许模拟盘逐步验证。"
+      ],
+      "avoid_rules": [
+        "连续加速高位再用利好解释的票，默认视为兑现风险，除非次日承接和板块强度同时确认。",
+        "一字板、秒板、缩量高位板不直接追；缺少换手和可执行买点时只记录观察。",
+        "龙虎榜单日豪华席位不等于买点；若位置高、筹码松、次日承接弱，应降权。",
+        "亏损后不得让 AI 自动扩大仓位或提高激进因子；必须先归因到选股、买点、卖点、风控或数据缺失。"
+      ],
+      "implementation_hooks": [
+        "后续接入涨停池/跌停池/炸板率后，把市场情绪周期作为 AI 选股质量分的一项。",
+        "后续接入龙虎榜席位后，用席位连续性、买卖净额、板块联动验证游资参与质量。",
+        "paper_trade_log.csv 完成后，每笔模拟交易都按本笔是否符合情绪、主线、买点、仓位、退出纪律打标签，作为策略记忆新增证据。",
+        "AI输出推荐时必须写明：当前属于情绪周期哪一段、板块是否有攻击、个股是否前排、买点是低吸/半路/打板/回封中的哪类。"
+      ]
+    },
+    {
+      "created_at": "2026-05-03 23:37:27",
+      "type": "live_screening_memory_sample",
+      "title": "当前短线筛选样本",
+      "summary": "来自真实8000服务的最新智能筛选结果，用于给后续模型继承当前短线偏好。",
+      "screening_count": 50,
+      "updated_at": "2026-05-03 23:05:29",
+      "sample": [
+        {
+          "code": "002579",
+          "name": "ä¸­äº¬çµå­",
+          "score": 71.8,
+          "quality_score": 71.8,
+          "historical_rule": 85.3,
+          "historical_status": "ready",
+          "support_pool_status": "support_pool"
+        },
+        {
+          "code": "002383",
+          "name": "åä¼æå£®",
+          "score": 70.0,
+          "quality_score": 70.0,
+          "historical_rule": 74.9,
+          "historical_status": "ready",
+          "support_pool_status": "support_pool"
+        },
+        {
+          "code": "300592",
+          "name": "åå¯æä½°",
+          "score": 69.5,
+          "quality_score": 69.5,
+          "historical_rule": 31.7,
+          "historical_status": "ready",
+          "support_pool_status": "near_support_watch"
+        },
+        {
+          "code": "002229",
+          "name": "é¸¿åè¡ä»½",
+          "score": 69.3,
+          "quality_score": 69.3,
+          "historical_rule": 99.1,
+          "historical_status": "ready",
+          "support_pool_status": "near_support_watch"
+        },
+        {
+          "code": "002697",
+          "name": "çº¢æè¿é",
+          "score": 68.8,
+          "quality_score": 68.8,
+          "historical_rule": 28.9,
+          "historical_status": "ready",
+          "support_pool_status": "support_pool"
+        },
+        {
+          "code": "002389",
+          "name": "èªå¤©å½©è¹",
+          "score": 68.0,
+          "quality_score": 68.0,
+          "historical_rule": 70.9,
+          "historical_status": "ready",
+          "support_pool_status": "near_support_watch"
+        },
+        {
+          "code": "300447",
+          "name": "å¨ä¿¡è¡ä»½",
+          "score": 67.5,
+          "quality_score": 67.5,
+          "historical_rule": 50.0,
+          "historical_status": "insufficient_kline",
+          "support_pool_status": "support_pool"
+        },
+        {
+          "code": "301558",
+          "name": "ä¸æè¡ä»½",
+          "score": 67.2,
+          "quality_score": 67.2,
+          "historical_rule": 43.9,
+          "historical_status": "ready",
+          "support_pool_status": "near_support_watch"
+        },
+        {
+          "code": "002244",
+          "name": "æ»¨æ±éå¢",
+          "score": 67.0,
+          "quality_score": 67.0,
+          "historical_rule": 44.5,
+          "historical_status": "ready",
+          "support_pool_status": "near_support_watch"
+        },
+        {
+          "code": "002845",
+          "name": "åå´è¾¾",
+          "score": 66.8,
+          "quality_score": 66.8,
+          "historical_rule": 61.0,
+          "historical_status": "ready",
+          "support_pool_status": "near_support_watch"
+        }
+      ]
+    },
+    {
+      "created_at": "2026-05-03 23:36:43",
+      "type": "initial_short_training_digest",
+      "title": "短线猎人初始训练摘要",
+      "summary": "结合当前本地行情缓存、公告风险缓存、历史相似规则有效性和公开龙虎榜/涨停池资料，形成模型无关短线记忆。",
+      "local_data": {
+        "screening_count": 0,
+        "stock_universe_count": 0,
+        "market_cache_root": "E:\\lianghua_market_cache"
+      },
+      "observations": [
+        "当前短线逻辑应优先支撑池和近支撑观察池，不把全市场高分排序直接等同买点。",
+        "历史相似规则有效性已经能进入候选和AI质量打分，样本不足时保持中性。",
+        "公告/财报风险缓存已经接入，命中业绩雷、减持、问询函、诉讼、审计非标时应降级或否决。",
+        "龙虎榜/涨停池后续适合作为短线情绪和席位行为特征，但不能只因知名游资出现而追高。"
+      ],
+      "top_screening_sample": []
+    }
+  ]
+}

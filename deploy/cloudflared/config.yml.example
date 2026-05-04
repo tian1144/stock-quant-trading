@@ -1,0 +1,7 @@
+tunnel: lianghua-h5
+credentials-file: C:\Users\Administrator\.cloudflared\<TUNNEL_ID>.json
+
+ingress:
+  - hostname: www.lianghuagongju222333.com
+    service: http://localhost:8000
+  - service: http_status:404

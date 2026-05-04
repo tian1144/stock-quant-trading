@@ -6,7 +6,7 @@ echo ========================================
 echo.
 
 echo 正在启动后端服务...
-start "股票行情服务" cmd /k "cd /d %~dp0backend && python run_simple.py"
+start "股票行情服务" cmd /k "cd /d %~dp0backend && .\venv\Scripts\python.exe run_simple.py"
 timeout /t 3 >nul
 
 echo.

@@ -1,0 +1,67 @@
+{
+  "pages": [
+    {
+      "path": "pages/index/index",
+      "style": {
+        "navigationBarTitleText": "股票行情",
+        "enablePullDownRefresh": true
+      }
+    },
+    {
+      "path": "pages/screening/screening",
+      "style": {
+        "navigationBarTitleText": "智能选股"
+      }
+    },
+    {
+      "path": "pages/signals/signals",
+      "style": {
+        "navigationBarTitleText": "交易信号"
+      }
+    },
+    {
+      "path": "pages/sectors/sectors",
+      "style": {
+        "navigationBarTitleText": "板块行情",
+        "enablePullDownRefresh": true
+      }
+    },
+    {
+      "path": "pages/portfolio/portfolio",
+      "style": {
+        "navigationBarTitleText": "持仓管理"
+      }
+    },
+    {
+      "path": "pages/stock-detail/stock-detail",
+      "style": {
+        "navigationBarTitleText": "股票详情"
+      }
+    },
+    {
+      "path": "pages/settings/settings",
+      "style": {
+        "navigationBarTitleText": "交易偏好"
+      }
+    },
+    {
+      "path": "pages/history/history",
+      "style": {
+        "navigationBarTitleText": "交易历史"
+      }
+    },
+    {
+      "path": "pages/news/news",
+      "style": {
+        "navigationBarTitleText": "新闻监控",
+        "enablePullDownRefresh": true
+      }
+    }
+  ],
+  "globalStyle": {
+    "navigationBarTextStyle": "white",
+    "navigationBarTitleText": "股票量化",
+    "navigationBarBackgroundColor": "#d71920",
+    "backgroundColor": "#f6f7fb"
+  }
+}

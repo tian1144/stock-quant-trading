@@ -1,0 +1,27 @@
+{
+  "portfolio": {
+    "initial_cash": 200000.0,
+    "available_cash": 200000.0,
+    "frozen_cash": 0.0,
+    "market_value": 0,
+    "total_asset": 200000.0,
+    "total_profit": 0.0,
+    "total_profit_pct": 0.0,
+    "today_profit": 0.0,
+    "today_trade_count": 0
+  },
+  "positions": {},
+  "orders": [],
+  "user_settings": {
+    "trading_style": "short",
+    "risk_appetite": "moderate",
+    "board_allow": {
+      "main": true,
+      "gem": true,
+      "star": true,
+      "bse": true
+    },
+    "blocked_sectors": []
+  },
+  "saved_at": "2026-05-04T13:31:29.272710"
+}

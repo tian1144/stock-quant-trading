@@ -1,0 +1,284 @@
+{
+  "rows": [
+    {
+      "video_id": "video-0020",
+      "relative_path": "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\13.《短线游资热点龙头战法》共40集\\10.如何精准发现盘中异动，自下而上挖掘新的热点板块和龙头股.mp4",
+      "themes": "watch_tape | leader_hotspot",
+      "priority_score": 75,
+      "frame_count": 6,
+      "frames": [
+        {
+          "second": 43.92,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0020\\video-0020_000043.jpg"
+        },
+        {
+          "second": 102.48,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0020\\video-0020_000102.jpg"
+        },
+        {
+          "second": 164.7,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0020\\video-0020_000164.jpg"
+        },
+        {
+          "second": 226.92,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0020\\video-0020_000226.jpg"
+        },
+        {
+          "second": 285.48,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0020\\video-0020_000285.jpg"
+        },
+        {
+          "second": 329.4,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0020\\video-0020_000329.jpg"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "video_id": "video-0036",
+      "relative_path": "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\13.《短线游资热点龙头战法》共40集\\27.短线热点龙头战法第六招共振低吸买入法.mp4",
+      "themes": "leader_hotspot | entry_setup",
+      "priority_score": 75,
+      "frame_count": 6,
+      "frames": [
+        {
+          "second": 67.46,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0036\\video-0036_000067.jpg"
+        },
+        {
+          "second": 157.41,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0036\\video-0036_000157.jpg"
+        },
+        {
+          "second": 252.98,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0036\\video-0036_000252.jpg"
+        },
+        {
+          "second": 348.55,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0036\\video-0036_000348.jpg"
+        },
+        {
+          "second": 438.5,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0036\\video-0036_000438.jpg"
+        },
+        {
+          "second": 505.96,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0036\\video-0036_000505.jpg"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "video_id": "video-0048",
+      "relative_path": "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\13.《短线游资热点龙头战法》共40集\\39.短线游资热点龙头战法操作纪律第二讲系统化止损原则.mp4",
+      "themes": "leader_hotspot | exit_risk | mindset_review",
+      "priority_score": 75,
+      "frame_count": 6,
+      "frames": [
+        {
+          "second": 67.1,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0048\\video-0048_000067.jpg"
+        },
+        {
+          "second": 156.58,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0048\\video-0048_000156.jpg"
+        },
+        {
+          "second": 251.64,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0048\\video-0048_000251.jpg"
+        },
+        {
+          "second": 346.7,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0048\\video-0048_000346.jpg"
+        },
+        {
+          "second": 436.18,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0048\\video-0048_000436.jpg"
+        },
+        {
+          "second": 503.28,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0048\\video-0048_000503.jpg"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "video_id": "video-0035",
+      "relative_path": "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\13.《短线游资热点龙头战法》共40集\\26.短线热点龙头战法第五招针尖低吸买入法.avi",
+      "themes": "leader_hotspot | entry_setup",
+      "priority_score": 75,
+      "frame_count": 6,
+      "frames": [
+        {
+          "second": 50.19,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0035\\video-0035_000050.jpg"
+        },
+        {
+          "second": 117.11,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0035\\video-0035_000117.jpg"
+        },
+        {
+          "second": 188.22,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0035\\video-0035_000188.jpg"
+        },
+        {
+          "second": 259.32,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0035\\video-0035_000259.jpg"
+        },
+        {
+          "second": 326.24,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0035\\video-0035_000326.jpg"
+        },
+        {
+          "second": 376.43,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0035\\video-0035_000376.jpg"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "video_id": "video-0012",
+      "relative_path": "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\08.《解密游资股市生存法则》共2集\\02.游资建仓、拉升、出货细节.flv",
+      "themes": "entry_setup | exit_risk | mindset_review",
+      "priority_score": 65,
+      "frame_count": 8,
+      "frames": [
+        {
+          "second": 296.88,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0012\\video-0012_000296.jpg"
+        },
+        {
+          "second": 890.64,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0012\\video-0012_000890.jpg"
+        },
+        {
+          "second": 1632.84,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0012\\video-0012_001632.jpg"
+        },
+        {
+          "second": 2597.7,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0012\\video-0012_002597.jpg"
+        },
+        {
+          "second": 3711.0,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0012\\video-0012_003711.jpg"
+        },
+        {
+          "second": 4824.3,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0012\\video-0012_004824.jpg"
+        },
+        {
+          "second": 5789.16,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0012\\video-0012_005789.jpg"
+        },
+        {
+          "second": 6679.8,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0012\\video-0012_006679.jpg"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "video_id": "video-0037",
+      "relative_path": "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\13.《短线游资热点龙头战法》共40集\\28.短线热点龙头战法第七招靠近5天线低吸买入法.mp4",
+      "themes": "leader_hotspot | entry_setup",
+      "priority_score": 65,
+      "frame_count": 6,
+      "frames": [
+        {
+          "second": 57.39,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0037\\video-0037_000057.jpg"
+        },
+        {
+          "second": 133.91,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0037\\video-0037_000133.jpg"
+        },
+        {
+          "second": 215.21,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0037\\video-0037_000215.jpg"
+        },
+        {
+          "second": 296.51,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0037\\video-0037_000296.jpg"
+        },
+        {
+          "second": 373.04,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0037\\video-0037_000373.jpg"
+        },
+        {
+          "second": 430.43,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0037\\video-0037_000430.jpg"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "video_id": "video-0038",
+      "relative_path": "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\13.《短线游资热点龙头战法》共40集\\29.短线热点龙头战法第八招靠近10天线低吸买入法.mp4",
+      "themes": "leader_hotspot | entry_setup",
+      "priority_score": 65,
+      "frame_count": 6,
+      "frames": [
+        {
+          "second": 42.2,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0038\\video-0038_000042.jpg"
+        },
+        {
+          "second": 98.46,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0038\\video-0038_000098.jpg"
+        },
+        {
+          "second": 158.24,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0038\\video-0038_000158.jpg"
+        },
+        {
+          "second": 218.02,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0038\\video-0038_000218.jpg"
+        },
+        {
+          "second": 274.28,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0038\\video-0038_000274.jpg"
+        },
+        {
+          "second": 316.48,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0038\\video-0038_000316.jpg"
+        }
+      ],
+      "errors": []
+    },
+    {
+      "video_id": "video-0016",
+      "relative_path": "64位游资\\13套游资训练视频-160G\\游资训练营13套视频\\13.《短线游资热点龙头战法》共40集\\05.如何把握龙头股的情绪周期，抓住热点板块龙头的买卖时机上.mp4",
+      "themes": "leader_hotspot | mindset_review",
+      "priority_score": 65,
+      "frame_count": 6,
+      "frames": [
+        {
+          "second": 43.77,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0016\\video-0016_000043.jpg"
+        },
+        {
+          "second": 102.14,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0016\\video-0016_000102.jpg"
+        },
+        {
+          "second": 164.15,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0016\\video-0016_000164.jpg"
+        },
+        {
+          "second": 226.16,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0016\\video-0016_000226.jpg"
+        },
+        {
+          "second": 284.52,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0016\\video-0016_000284.jpg"
+        },
+        {
+          "second": 328.29,
+          "path": "C:\\Users\\Administrator\\Desktop\\lianghua1\\backend\\data\\ai\\youzi_trade_notes\\video\\frames\\video-0016\\video-0016_000328.jpg"
+        }
+      ],
+      "errors": []
+    }
+  ]
+}
