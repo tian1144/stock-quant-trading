@@ -3,7 +3,8 @@ setlocal
 
 cd /d "%~dp0"
 
-set "LOCAL_URL=http://localhost:8000"
+set "LOCAL_URL=http://127.0.0.1:8000"
+set "HEALTH_URL=http://127.0.0.1:8000/api/v1/health"
 set "PYTHON_EXE=%~dp0backend\venv\Scripts\python.exe"
 set "CLOUDFLARED=cloudflared"
 
@@ -47,13 +48,24 @@ if not exist "%PYTHON_EXE%" (
 )
 
 echo [1/2] Checking local backend port 8000...
-netstat -ano | findstr /R /C:":8000 .*LISTENING" >nul
+powershell -NoProfile -Command "try { $r = Invoke-WebRequest -UseBasicParsing '%HEALTH_URL%' -TimeoutSec 3; if ($r.StatusCode -eq 200) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>nul
 if errorlevel 1 (
-  echo Port 8000 is free. Starting local backend...
+  echo Local backend is not healthy. Starting local backend...
   start "Lianghua H5 Backend" cmd /k ""%PYTHON_EXE%" preview_server.py"
   timeout /t 5 /nobreak >nul
+  powershell -NoProfile -Command "try { $r = Invoke-WebRequest -UseBasicParsing '%HEALTH_URL%' -TimeoutSec 5; if ($r.StatusCode -eq 200) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>nul
+  if errorlevel 1 (
+    echo [ERROR] Local backend still cannot be reached:
+    echo %HEALTH_URL%
+    echo.
+    echo Open http://127.0.0.1:8000 in your browser first.
+    echo If it does not open, close old backend windows and run this script again.
+    echo.
+    pause
+    exit /b 1
+  )
 ) else (
-  echo Port 8000 is already running. Reusing the existing backend.
+  echo Local backend is healthy. Reusing it.
 )
 
 echo [2/2] Starting temporary Cloudflare tunnel...

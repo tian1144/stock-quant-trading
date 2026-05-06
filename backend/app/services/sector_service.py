@@ -119,6 +119,7 @@ _sector_news_archive: Dict[str, list] = {}
 _sector_detail_cache: Dict[str, dict] = {}
 _sector_overview_cache: dict = {"updated_at": 0.0, "payload": None}
 SECTOR_OVERVIEW_TTL = 12
+SECTOR_STOCK_REFRESH_TTL_SECONDS = 90
 SECTOR_CACHE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "data", "sector_cache"))
 SECTOR_NEWS_ARCHIVE_PATH = os.path.join(SECTOR_CACHE_DIR, "sector_news_archive.json")
 SECTOR_NEWS_NORMAL_DAYS = 31
@@ -194,6 +195,32 @@ def _parse_news_datetime(value: str | None) -> datetime:
         except Exception:
             continue
     return now
+
+
+def _parse_cache_datetime(value: str | None) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.strptime(text, fmt)
+        except Exception:
+            continue
+    return None
+
+
+def _is_sector_stock_cache_usable(detail: dict) -> bool:
+    stocks = (detail or {}).get("stocks") or []
+    if not stocks:
+        return False
+    # 闭市期间股票层不主动刷新，避免外部行情源抖动把已缓存详情冲掉。
+    if not data_fetcher.is_trading_hours():
+        return True
+    cached_at = _parse_cache_datetime((detail or {}).get("cached_at"))
+    if not cached_at:
+        return False
+    age = (datetime.now() - cached_at).total_seconds()
+    return age <= SECTOR_STOCK_REFRESH_TTL_SECONDS
 
 
 def _archive_sector_news(sector_name: str, item: dict, *, persist: bool = True):
@@ -521,6 +548,25 @@ def build_sector_news_map(sectors: list | None = None) -> Dict[str, dict]:
     return result
 
 
+def build_single_sector_news(sector_name: str, sectors: list | None = None) -> dict:
+    """只计算单个板块的新闻归因，避免详情页点击时重算全市场板块新闻。"""
+    bucket = {"news": [], "positive": 0, "negative": 0, "neutral": 0, "impact_score": 0}
+    if not sector_name:
+        return bucket
+    sector_pool = sectors or state_store.get_sector_list()
+    for item in state_store.get_news() or []:
+        tags = classify_news_for_sectors(item, sector_pool)
+        if sector_name not in tags.get("sector_tags", []):
+            continue
+        enriched = {**item, **tags}
+        bucket["news"].append(enriched)
+        bucket[tags["sentiment"]] += 1
+        bucket["impact_score"] += tags["impact_score"]
+    bucket["news"].sort(key=lambda item: _parse_news_datetime(item.get("time")), reverse=True)
+    bucket["news"] = bucket["news"][:50]
+    return bucket
+
+
 def get_sector_rankings() -> list:
     """获取板块排名，合并资金流与新闻归因。"""
     sectors = state_store.get_sector_list()
@@ -576,20 +622,34 @@ def get_sector_rankings() -> list:
 
 def get_sector_full_detail(sector_code: str) -> dict:
     """获取板块完整详情：成分股、资金流、新闻、龙头/热门股与行情概况。"""
-    if sector_code in _sector_detail_cache:
-        return {**_sector_detail_cache[sector_code], "cache_hit": True}
-
     sectors = state_store.get_sector_list()
     if not sectors:
         sectors = refresh_sector_data()
     sector = next((s for s in sectors if s.get("code") == sector_code), {})
     sector_name = sector.get("name", "")
 
-    detail = state_store.get_sector_detail(sector_code) or _read_sector_cache(f"sector_detail_{sector_code}", {})
-    stocks = (detail or {}).get("stocks") or data_fetcher.fetch_sector_detail(sector_code)
+    detail = (
+        state_store.get_sector_detail(sector_code)
+        or _read_sector_cache(f"sector_detail_{sector_code}", {})
+        or {}
+    )
+    stocks = (detail or {}).get("stocks") or []
+    stock_cache_hit = _is_sector_stock_cache_usable(detail)
+    if not stock_cache_hit:
+        fetched_stocks = data_fetcher.fetch_sector_detail(sector_code)
+        if fetched_stocks:
+            stocks = fetched_stocks
+            detail = {
+                "stocks": stocks,
+                "cached_at": datetime.now().isoformat(timespec="seconds"),
+                "cache_policy": "closed_market_static" if not data_fetcher.is_trading_hours() else "trading_ttl",
+            }
     if stocks:
-        state_store.set_sector_detail(sector_code, {"stocks": stocks, "cached_at": datetime.now().isoformat(timespec="seconds")})
-        _write_sector_cache(f"sector_detail_{sector_code}", {"stocks": stocks, "cached_at": datetime.now().isoformat(timespec="seconds")})
+        if not detail.get("cached_at"):
+            detail["cached_at"] = datetime.now().isoformat(timespec="seconds")
+        detail["stocks"] = stocks
+        state_store.set_sector_detail(sector_code, detail)
+        _write_sector_cache(f"sector_detail_{sector_code}", detail)
     sorted_stocks = sorted(stocks, key=lambda x: _to_number(x.get("pct_change")), reverse=True)
     hot_stocks = sorted_stocks[:10]
     leader = next((s for s in sorted_stocks if s.get("code") == sector.get("leader_code")), None) or (sorted_stocks[0] if sorted_stocks else {})
@@ -597,7 +657,7 @@ def get_sector_full_detail(sector_code: str) -> dict:
     flows = state_store.get_sector_money_flow()
     flow = next((f for f in flows if f.get("code") == sector_code), {})
     _load_sector_news_archive()
-    news_bucket = build_sector_news_map(sectors).get(sector_name, {"news": [], "positive": 0, "negative": 0, "neutral": 0, "impact_score": 0})
+    news_bucket = build_single_sector_news(sector_name, sectors)
     timeline = sorted(
         {item.get("title", ""): item for item in [*news_bucket.get("news", []), *_sector_news_archive.get(sector_name, [])] if item.get("title")}.values(),
         key=lambda item: _parse_news_datetime(item.get("time")),
@@ -606,10 +666,20 @@ def get_sector_full_detail(sector_code: str) -> dict:
     up_count = sum(1 for s in stocks if _to_number(s.get("pct_change")) > 0)
     down_count = sum(1 for s in stocks if _to_number(s.get("pct_change")) < 0)
 
+    partial = not bool(stocks)
     payload = {
         "code": sector_code,
         "name": sector_name,
         "sector_type": sector.get("sector_type", ""),
+        "partial": partial,
+        "data_status": "partial_without_constituents" if partial else "ok",
+        "message": "成分股数据源暂不可用，已先返回板块资金流、涨跌和新闻归因基础详情。" if partial else "",
+        "stock_cache": {
+            "hit": bool(stock_cache_hit),
+            "cached_at": detail.get("cached_at"),
+            "policy": "闭市期间成分股/热门股保持缓存，不主动刷新；盘中按短TTL刷新。",
+            "is_trading_hours": data_fetcher.is_trading_hours(),
+        },
         "summary": {
             "pct_change": _to_number(sector.get("pct_change")),
             "advance_count": sector.get("advance_count", up_count),

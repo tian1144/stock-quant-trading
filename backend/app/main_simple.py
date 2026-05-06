@@ -1,6 +1,6 @@
 ﻿from fastapi import FastAPI, Query, Body
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from contextlib import asynccontextmanager
 import logging
 import os
@@ -12,6 +12,8 @@ import socket
 import requests
 import threading
 import asyncio
+import subprocess
+import sys
 from datetime import datetime
 
 logging.basicConfig(
@@ -31,7 +33,8 @@ from app.services import (
     portfolio_manager, risk_manager, state_store,
     news_service, data_fetcher, sector_service, agent_workspace,
     technical_analysis, ai_model_service, ai_stock_picker, market_data_hub,
-    disclosure_service, strategy_memory_service, trade_review_service
+    disclosure_service, strategy_memory_service, trade_review_service,
+    ai_trustee_service, trading_calendar_service
 )
 from app.backtest.engine import BacktestEngine, create_context_ma_crossover_strategy
 from app.backtest.context import build_context_provider
@@ -53,6 +56,8 @@ from app.execution.kill_switch import activate_kill_switch, deactivate_kill_swit
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+BACKEND_ROOT = os.path.dirname(os.path.dirname(__file__))
+SCREENING_JOB_DIR = os.path.join(BACKEND_ROOT, "data", "jobs", "screening")
 SERVER_BOOT_ID = f"{os.getpid()}-{int(time.time())}"
 
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0'
@@ -65,6 +70,7 @@ async def lifespan(app: FastAPI):
     await trading_engine.startup_quant_system()
     agent_workspace.bootstrap_logs()
     market_data_hub.start_hub()
+    ai_trustee_service.start_background_loop()
     threading.Thread(target=_realtime_refresh_loop, daemon=True).start()
     threading.Thread(target=_post_close_validation_loop, daemon=True).start()
     threading.Thread(target=_stock_universe_monitor_loop, daemon=True).start()
@@ -91,6 +97,42 @@ app.add_middleware(
 _stock_cache = {"stocks": [], "updated_at": 0}
 _stock_detail_cache = {}
 CACHE_TTL = 300
+
+
+def _normalize_quote_price(value, reference_price: float = 0.0) -> float:
+    try:
+        price = float(value or 0)
+    except Exception:
+        return 0.0
+    if price <= 0:
+        return 0.0
+    try:
+        ref = float(reference_price or 0)
+    except Exception:
+        ref = 0.0
+    if ref > 0:
+        for divisor in (100, 1000, 10000):
+            scaled = price / divisor
+            if abs(scaled - ref) / max(abs(scaled), abs(ref), 1.0) <= 0.25:
+                return round(scaled, 4)
+        if price > ref * 20:
+            return round(price / 100, 4)
+    if price > 10000:
+        return round(price / 100, 4)
+    return price
+
+
+def _normalize_realtime_quote(realtime: dict) -> dict:
+    if not isinstance(realtime, dict) or not realtime:
+        return realtime or {}
+    fixed = dict(realtime)
+    ref = fixed.get("price") or fixed.get("current_price") or fixed.get("pre_close")
+    for field in ("price", "open", "high", "low", "pre_close", "limit_up", "limit_down", "avg_price"):
+        if field in fixed:
+            fixed[field] = _normalize_quote_price(fixed.get(field), ref)
+    return fixed
+
+
 _market_cache_job = {
     "running": False,
     "started_at": None,
@@ -148,24 +190,10 @@ _market_data_hub_job = {
     "message": "行情数据引入中枢等待调度",
 }
 
-DEMO_STOCKS = [
-    {"code": "600519", "name": "贵州茅台", "exchange": "sh", "market": "主板", "industry": "白酒", "is_st": False, "price": 1688.00, "pct_change": 1.26, "volume": 32600, "amount": 5500000000.0},
-    {"code": "300750", "name": "宁德时代", "exchange": "sz", "market": "创业板", "industry": "新能源", "is_st": False, "price": 212.35, "pct_change": -0.84, "volume": 185000, "amount": 3920000000.0},
-    {"code": "601318", "name": "中国平安", "exchange": "sh", "market": "主板", "industry": "保险", "is_st": False, "price": 48.72, "pct_change": 0.38, "volume": 420000, "amount": 2040000000.0},
-    {"code": "000858", "name": "五粮液", "exchange": "sz", "market": "主板", "industry": "白酒", "is_st": False, "price": 143.18, "pct_change": 0.92, "volume": 156000, "amount": 2230000000.0},
-    {"code": "600036", "name": "招商银行", "exchange": "sh", "market": "主板", "industry": "银行", "is_st": False, "price": 36.28, "pct_change": 0.67, "volume": 510000, "amount": 1850000000.0},
-    {"code": "002594", "name": "比亚迪", "exchange": "sz", "market": "中小板", "industry": "汽车", "is_st": False, "price": 226.40, "pct_change": -1.12, "volume": 198000, "amount": 4480000000.0},
-    {"code": "688981", "name": "中芯国际", "exchange": "sh", "market": "科创板", "industry": "半导体", "is_st": False, "price": 55.66, "pct_change": 2.18, "volume": 690000, "amount": 3840000000.0},
-    {"code": "601899", "name": "紫金矿业", "exchange": "sh", "market": "主板", "industry": "有色金属", "is_st": False, "price": 18.92, "pct_change": 1.74, "volume": 980000, "amount": 1850000000.0},
-]
-
 def _ensure_stock_universe(stocks: list):
     if stocks:
         state_store.update_stock_universe(stocks)
         agent_workspace.record_event("data", "stock_universe", f"股票池已更新：{len(stocks)} 只。")
-
-def _demo_stock(code: str):
-    return next((s for s in DEMO_STOCKS if s["code"] == code), None)
 
 def _classify_stock(symbol: str):
     code = symbol.replace("sh", "").replace("sz", "").replace("bj", "")
@@ -263,8 +291,6 @@ def _load_stock_universe_fast(force_refresh: bool = False) -> list:
             fresh = _normalize_stock_universe(data_fetcher.fetch_all_stocks_sina())
         if fresh and len(fresh) >= len(stocks):
             stocks = fresh
-    if not stocks:
-        stocks = _normalize_stock_universe(DEMO_STOCKS)
     stocks = _active_stock_universe(stocks)
     _stock_cache["stocks"] = stocks
     _stock_cache["updated_at"] = time.time()
@@ -279,6 +305,45 @@ def _update_screening_job(job_id: str, **updates):
         job["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         _screening_jobs[job_id] = job
         return job.copy()
+
+
+def _screening_job_path(job_id: str) -> str:
+    safe_id = re.sub(r"[^a-zA-Z0-9_.-]", "_", str(job_id or ""))
+    return os.path.join(SCREENING_JOB_DIR, f"{safe_id}.json")
+
+
+def _read_screening_job_file(job_id: str) -> dict:
+    path = _screening_job_path(job_id)
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f) or {}
+    except Exception:
+        return {}
+
+
+def _write_screening_job_file(job: dict):
+    os.makedirs(SCREENING_JOB_DIR, exist_ok=True)
+    path = _screening_job_path(job.get("job_id"))
+    tmp_path = f"{path}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(_json_safe(job), f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, path)
+
+
+def _recent_running_screening_job() -> dict | None:
+    candidates = []
+    with _screening_jobs_lock:
+        candidates.extend([j.copy() for j in _screening_jobs.values()])
+    if os.path.isdir(SCREENING_JOB_DIR):
+        for name in os.listdir(SCREENING_JOB_DIR):
+            if not name.endswith(".json"):
+                continue
+            candidates.append(_read_screening_job_file(name[:-5]))
+    active = [j for j in candidates if j.get("status") in ("queued", "running")]
+    active.sort(key=lambda j: str(j.get("updated_at") or j.get("created_at") or ""), reverse=True)
+    return active[0] if active else None
 
 
 def _run_screening_job(job_id: str, params: dict):
@@ -762,6 +827,14 @@ async def root():
             )
     return HTMLResponse(content="<h1>股票行情系统</h1><p>网页文件未找到</p>")
 
+@app.get("/static/assets/{filename}")
+async def static_asset(filename: str):
+    safe_name = os.path.basename(filename)
+    asset_file = os.path.join(STATIC_DIR, "assets", safe_name)
+    if os.path.exists(asset_file) and os.path.isfile(asset_file):
+        return FileResponse(asset_file)
+    return HTMLResponse(content="Not found", status_code=404)
+
 @app.get("/api/v1/health")
 async def health_check():
     return {
@@ -1073,18 +1146,7 @@ async def get_snapshot(stock_code: str):
             "amount": quote["amount"],
             "source": "同花顺",
         }
-    demo = _demo_stock(stock_code)
-    if demo:
-        return {
-            "code": stock_code,
-            "name": demo["name"],
-            "current_price": demo["price"],
-            "open": round(demo["price"] / (1 + demo["pct_change"] / 100), 2),
-            "volume": demo["volume"],
-            "amount": demo["amount"],
-            "source": "本地演示数据",
-        }
-    return {"error": "获取行情数据失败"}
+    return {"error": "获取行情数据失败", "message": "数据缺失"}
 
 @app.get("/api/v1/market/snapshots")
 async def get_snapshots(
@@ -1148,10 +1210,18 @@ async def run_screening(payload: dict | None = Body(default=None)):
     if strategy in ("short", "long", "event_driven"):
         state_store.update_user_settings({"trading_style": strategy})
     if not state_store.get_stock_universe():
-        stocks = _stock_cache["stocks"] or DEMO_STOCKS
-        _stock_cache["stocks"] = stocks
-        _stock_cache["updated_at"] = time.time()
-        _ensure_stock_universe(stocks)
+        stocks = _stock_cache["stocks"] or data_fetcher.read_stock_universe_cache() or []
+        if stocks:
+            _stock_cache["stocks"] = stocks
+            _stock_cache["updated_at"] = time.time()
+            _ensure_stock_universe(stocks)
+        else:
+            return {
+                "message": "数据缺失",
+                "count": 0,
+                "results": [],
+                "logic": stock_screener.get_screening_logic_summary(),
+            }
     results = await asyncio.to_thread(trading_engine.manual_screening)
     agent_workspace.record_event("score", "screening", f"选股完成：{len(results)} 个候选。")
     return {
@@ -1167,8 +1237,7 @@ async def start_screening_job(payload: dict | None = Body(default=None)):
     """启动后台智能选股任务，避免浏览器等待长请求超时。"""
     payload = payload or {}
     strategy = payload.get("strategy")
-    with _screening_jobs_lock:
-        running = next((j for j in _screening_jobs.values() if j.get("status") == "running"), None)
+    running = _recent_running_screening_job()
     if running:
         return {
             "status": "running",
@@ -1188,7 +1257,28 @@ async def start_screening_job(payload: dict | None = Body(default=None)):
     }
     with _screening_jobs_lock:
         _screening_jobs[job_id] = job
-    threading.Timer(0.2, _run_screening_job, args=(job_id, job["params"])).start()
+    _write_screening_job_file(job)
+    runner = os.path.join(BACKEND_ROOT, "scripts", "run_screening_job.py")
+    try:
+        subprocess.Popen(
+            [sys.executable, runner, "--job-id", job_id, "--strategy", strategy or ""],
+            cwd=BACKEND_ROOT,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except Exception as exc:
+        logger.exception("failed to start screening subprocess")
+        job.update({
+            "status": "failed",
+            "stage": "failed",
+            "message": f"智能选股子进程启动失败：{exc}",
+            "error": str(exc),
+            "finished_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        })
+        with _screening_jobs_lock:
+            _screening_jobs[job_id] = job
+        _write_screening_job_file(job)
     return {"status": "started", "job_id": job_id, "job": job}
 
 
@@ -1197,6 +1287,11 @@ async def get_screening_job_status(job_id: str):
     """查询后台智能选股任务状态。"""
     with _screening_jobs_lock:
         job = (_screening_jobs.get(job_id) or {}).copy()
+    file_job = _read_screening_job_file(job_id)
+    if file_job:
+        job.update(file_job)
+        with _screening_jobs_lock:
+            _screening_jobs[job_id] = job.copy()
     if not job:
         return {"status": "missing", "job_id": job_id, "message": "未找到该选股任务"}
     return job
@@ -1376,6 +1471,17 @@ async def get_ai_signal_pick_status(job_id: str):
     return _json_safe(job)
 
 
+@app.get("/api/v1/quant/signals/ai-pick/latest")
+async def get_latest_ai_signal_pick_status():
+    """读取最近一次AI选股后台任务状态，用于前端轮询抖动时兜底。"""
+    with _ai_pick_jobs_lock:
+        jobs = list(_ai_pick_jobs.values())
+        latest = max(jobs, key=lambda item: item.get("updated_at") or item.get("created_at") or "") if jobs else {}
+    if not latest:
+        return {"status": "not_found", "message": "暂无AI选股任务"}
+    return _json_safe(dict(latest))
+
+
 @app.post("/api/v1/quant/stocks/{code}/ai-analysis")
 async def run_single_stock_ai_analysis(code: str, payload: dict | None = Body(default=None)):
     """对单只股票执行AI分析，并加入AI推荐/分析列表。"""
@@ -1414,7 +1520,7 @@ def _site_ai_stock_universe() -> list:
     if isinstance(stocks, dict):
         stocks = list(stocks.values())
     if not stocks:
-        stocks = data_fetcher.read_stock_universe_cache() or DEMO_STOCKS
+        stocks = data_fetcher.read_stock_universe_cache() or []
     if isinstance(stocks, dict):
         stocks = list(stocks.values())
     return stocks
@@ -1722,6 +1828,68 @@ async def reset_portfolio():
     return {"message": "组合已重置为初始状态（20万资金）"}
 
 
+@app.get("/api/v1/quant/ai-trustee/status")
+async def get_ai_trustee_status():
+    """获取AI托管状态。"""
+    return _json_safe(ai_trustee_service.get_status())
+
+
+@app.get("/api/v1/quant/ai-trustee/records")
+async def get_ai_trustee_records(limit: int = Query(300, ge=1, le=1000)):
+    """获取AI托管挂单、成交、分析和复盘记录。"""
+    return _json_safe(ai_trustee_service.get_records(limit=limit))
+
+
+@app.post("/api/v1/quant/ai-trustee/start")
+async def start_ai_trustee(payload: dict = Body(default=None)):
+    """开启AI托管。当前仅允许模拟盘执行。"""
+    payload = payload or {}
+    account_type = payload.get("account_type") or "simulation"
+    end_date = payload.get("end_date") or datetime.now().strftime("%Y-%m-%d")
+    result = ai_trustee_service.start_trustee(account_type=account_type, end_date=end_date)
+    agent_workspace.record_event(
+        "execution",
+        "ai_trustee_start",
+        f"AI托管请求：{account_type} 至 {end_date}。",
+        payload={"success": result.get("success"), "error": result.get("error")},
+    )
+    return _json_safe(result)
+
+
+@app.post("/api/v1/quant/ai-trustee/stop")
+async def stop_ai_trustee(payload: dict = Body(default=None)):
+    """停止AI托管。"""
+    payload = payload or {}
+    result = ai_trustee_service.stop_trustee(
+        account_type=payload.get("account_type") or "simulation",
+        reason=payload.get("reason") or "用户手动停止AI托管",
+    )
+    agent_workspace.record_event("execution", "ai_trustee_stop", "AI托管已停止。")
+    return _json_safe(result)
+
+
+@app.post("/api/v1/quant/ai-trustee/review")
+async def run_ai_trustee_review(payload: dict = Body(default=None)):
+    """手动触发AI托管复盘。"""
+    payload = payload or {}
+    return _json_safe(ai_trustee_service.run_daily_review(force=bool(payload.get("force", True))))
+
+
+@app.get("/api/v1/quant/trading-calendar/month")
+async def get_trading_calendar_month(
+    year: int = Query(..., ge=2000, le=2100),
+    month: int = Query(..., ge=1, le=12),
+):
+    """获取A股月度交易日历，用于托管日期选择。"""
+    return _json_safe(trading_calendar_service.month_calendar(year, month))
+
+
+@app.get("/api/v1/quant/trading-calendar/normalize")
+async def normalize_trading_date(date: str = Query(..., min_length=8, max_length=10)):
+    """把用户选择日期归一化为截止日前最后一个A股交易日。"""
+    return _json_safe(trading_calendar_service.normalize_trustee_end_date(date))
+
+
 @app.get("/api/v1/quant/system/status")
 async def get_system_status():
     """获取系统状态"""
@@ -1739,13 +1907,29 @@ async def toggle_auto_trade(enabled: bool = Body(..., embed=True)):
 async def get_news(limit: int = Query(500, ge=1, le=2000)):
     """获取最新新闻"""
     news = news_service.ensure_news_loaded()
-    sentiment = news_service.get_market_sentiment()
     meta = state_store.get_news_meta()
-    enriched_news = _enrich_news_for_market(news)
+    limited_news = (news or [])[:limit]
+    try:
+        sentiment = news_service.get_market_sentiment()
+    except Exception as exc:
+        logger.warning("新闻情绪统计失败，返回缓存新闻: %s", exc)
+        sentiment = {
+            "level": "待刷新",
+            "sentiment_score": "--",
+            "positive_news": 0,
+            "negative_news": 0,
+            "source_meta": meta,
+        }
+    try:
+        enriched_news = _enrich_news_for_market(limited_news)
+    except Exception as exc:
+        logger.warning("新闻市场归因失败，返回原始缓存新闻: %s", exc)
+        enriched_news = limited_news
     return {
-        "news": enriched_news[:limit],
+        "news": enriched_news,
         "sentiment": sentiment,
         "source_meta": meta,
+        "count": len(news or []),
     }
 
 
@@ -1754,7 +1938,13 @@ async def refresh_news(payload: dict = Body(None)):
     """手动刷新新闻监控"""
     payload = payload or {}
     watchlist_codes = payload.get("watchlist_codes") or []
-    news = news_service.refresh_news(watchlist_codes=watchlist_codes)
+    try:
+        news = news_service.refresh_news(watchlist_codes=watchlist_codes)
+    except Exception as e:
+        logger.exception("新闻刷新接口异常，回退到缓存新闻")
+        news = news_service.ensure_news_loaded()
+        meta = state_store.get_news_meta()
+        state_store.set_news_meta({**meta, "refresh_error": str(e), "cache_fallback": True})
     sentiment = news_service.get_market_sentiment()
     meta = state_store.get_news_meta()
     agent_workspace.record_event(
@@ -1764,11 +1954,13 @@ async def refresh_news(payload: dict = Body(None)):
         payload={"source_meta": meta},
     )
     return {
-        "message": "新闻刷新完成" if news else "新闻获取失败",
+        "message": "新闻刷新完成" if news and not meta.get("cache_fallback") else ("新闻源暂不可用，已返回缓存新闻" if news else "新闻获取失败"),
         "count": len(news or []),
-        "news": _enrich_news_for_market(news or [])[:500],
+        "news": _enrich_news_for_market((news or [])[:500]),
         "sentiment": sentiment,
         "source_meta": meta,
+        "cache_fallback": bool(meta.get("cache_fallback")),
+        "error": "" if news else meta.get("refresh_error", ""),
     }
 
 
@@ -1813,11 +2005,7 @@ async def get_stock_minutes(code: str):
     """获取分时图数据"""
     _track_realtime_code(code)
     minutes = state_store.get_intraday(code)
-    if (
-        not minutes
-        or (minutes and minutes[0].get("source") == "estimated")
-        or not data_fetcher.intraday_minutes_valid(minutes)
-    ):
+    if not minutes or not data_fetcher.intraday_minutes_valid(minutes):
         minutes = data_fetcher.fetch_intraday_minutes(code, allow_fallback=False)
     source = minutes[0].get("source") if minutes else None
     return {
@@ -1825,7 +2013,7 @@ async def get_stock_minutes(code: str):
         "minutes": minutes,
         "source": source or "unavailable",
         "status": "ok" if minutes else "unavailable",
-        "message": "" if minutes else "分时数据源暂不可用，已停止使用估算曲线。",
+        "message": "" if minutes else "分时数据缺失，已停止使用估算曲线。",
     }
 
 
@@ -1837,12 +2025,12 @@ async def get_stock_kline(code: str, period: int = Query(101), days: int = Query
     _track_realtime_code(code)
     df = data_fetcher._read_kline_cache(code, period, days)
     min_required = min(int(days or 0), 30) if int(period) == 101 else min(int(days or 0), 8)
-    if df is not None and min_required and len(df) < min_required:
+    if df is None:
+        df = data_fetcher.fetch_kline(code, period, days, allow_fallback=False, prefer_cache=False, force_refresh=True)
+    elif min_required and len(df) < min_required:
         df = data_fetcher.fetch_kline(code, period, days, allow_fallback=False, prefer_cache=False, force_refresh=True)
     if df is None:
         df = state_store.get_kline(code, period)
-    if df is None or (not df.empty and "source" in df.columns and df["source"].iloc[0] == "estimated"):
-        df = data_fetcher.fetch_kline(code, period, days, allow_fallback=False)
     if df is None:
         return {
             "code": code,
@@ -1850,7 +2038,7 @@ async def get_stock_kline(code: str, period: int = Query(101), days: int = Query
             "klines": [],
             "source": "unavailable",
             "status": "unavailable",
-            "message": "K线数据源暂不可用，已停止使用估算K线。",
+            "message": "K线数据缺失。",
         }
     if period == 101 and state_store.get_daily_bars(code) is None:
         state_store.set_daily_bars(code, df)
@@ -1901,60 +2089,36 @@ async def get_stock_detail(code: str):
     if cached and time.time() - cached.get("updated_at", 0) < 8:
         return {**cached["payload"], "cache_hit": True}
 
-    stock_info = state_store.get_stock_info(code) or _demo_stock(code) or {}
+    stock_info = state_store.get_stock_info(code) or {}
     if not stock_info:
         stock_info = next((s for s in (_stock_cache.get("stocks") or []) if s.get("code") == code), {})
 
-    # 实时行情
+    # 打开详情时按需补齐：缓存没有或字段不足时，主动从腾讯/新浪/同花顺/东方财富等公开源拉取，
+    # 拉到真实数据后由 data_fetcher 写入正式缓存或候选缓存。
     realtime = data_fetcher.read_realtime_cache(code) or state_store.get_realtime(code)
-    if not realtime and stock_info:
-        realtime = {
-            "code": code,
-            "name": stock_info.get("name", ""),
-            "price": stock_info.get("price", 0),
-            "pct_change": stock_info.get("pct_change", 0),
-            "volume": stock_info.get("volume", 0),
-            "amount": stock_info.get("amount", 0),
-            "source": "stock_universe_cache",
-        }
-        state_store.set_realtime(code, realtime)
-    realtime_batch = data_fetcher.fetch_realtime_batch([code])
+    realtime_batch = data_fetcher.fetch_verified_realtime_batch([code], require_verified_for_cache=False)
     if realtime_batch.get(code):
         realtime = realtime_batch.get(code)
     elif not realtime:
         realtime = state_store.get_realtime(code) or {}
+    realtime = _normalize_realtime_quote(realtime)
     if not realtime:
         quote = _fetch_ths_quote(code) or {}
         if quote:
-            realtime = {"code": code, **quote}
-            state_store.set_realtime(code, realtime)
-    if not realtime:
-        demo = _demo_stock(code)
-        if demo:
-            base = demo["price"] / (1 + demo["pct_change"] / 100)
-            realtime = {
-                "code": code,
-                "name": demo["name"],
-                "price": demo["price"],
-                "pct_change": demo["pct_change"],
-                "open": round(base, 2),
-                "high": round(demo["price"] * 1.018, 2),
-                "low": round(demo["price"] * 0.982, 2),
-                "volume": demo["volume"],
-                "amount": demo["amount"],
-                "turnover_rate": 1.26,
-                "volume_ratio": 1.18,
-            }
+            realtime = _normalize_realtime_quote({"code": code, **quote})
             state_store.set_realtime(code, realtime)
 
     # 资金流向
-    flow = state_store.get_money_flow(code)
-    # 详情页优先快速展示，不在首屏阻塞等待外部资金流接口。
+    flow = state_store.get_money_flow(code) or data_fetcher.read_money_flow_cache(code)
+    if not flow:
+        flow = data_fetcher.fetch_money_flow(code)
 
     # 技术指标
     daily_df = state_store.get_daily_bars(code)
     if daily_df is None:
         daily_df = data_fetcher._read_kline_cache(code, 101, 120)
+        if daily_df is None:
+            daily_df = data_fetcher.fetch_kline(code, period=101, days=120, allow_fallback=False, prefer_cache=False, force_refresh=True)
         if daily_df is not None:
             state_store.set_daily_bars(code, daily_df)
     tech = {}
@@ -2241,8 +2405,10 @@ async def update_ai_policy(updates: dict = Body(...)):
 
 
 @app.post("/api/v1/ai/config/clear")
-async def clear_ai_config():
+async def clear_ai_config(confirm: bool = Body(False, embed=True)):
     """清空本地 AI 配置与密钥。"""
+    if not confirm:
+        return {"ok": False, "error": "为保护已保存模型，清空配置必须手动确认。"}
     result = ai_model_service.clear_config()
     agent_workspace.record_event("decision", "ai_model_clear", "AI 模型本地配置已清空。")
     return result

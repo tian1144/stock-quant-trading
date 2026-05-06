@@ -113,6 +113,23 @@ def _relative_close(a, b, tolerance: float) -> bool:
     return abs(a - b) / base <= tolerance
 
 
+def _normalize_price_by_reference(value, reference_price: float = 0.0) -> float:
+    price = _to_float(value)
+    if price <= 0:
+        return 0.0
+    ref = _to_float(reference_price)
+    if ref > 0:
+        for divisor in (100, 1000, 10000):
+            scaled = price / divisor
+            if _relative_close(scaled, ref, 0.25):
+                return round(scaled, 4)
+        if price > ref * 20:
+            return round(price / 100, 4)
+    if price > 10000:
+        return round(price / 100, 4)
+    return price
+
+
 def _write_validation_report(code: str, data_type: str, report: dict):
     payload = dict(report or {})
     payload["code"] = code
@@ -278,6 +295,8 @@ def _read_kline_cache(code: str, period: int = 101, days: Optional[int] = None) 
         if "date" in df.columns:
             df["date"] = df["date"].astype(str)
             df = df.sort_values("date").reset_index(drop=True)
+        if "source" in df.columns and not df.empty and str(df["source"].iloc[0]) == "estimated":
+            return None
         if days:
             df = df.tail(int(days)).reset_index(drop=True)
         df["source"] = "cache_file"
@@ -408,6 +427,10 @@ def _write_realtime_cache(code: str, data: dict):
     if not data:
         return
     payload = dict(data)
+    reference_price = payload.get("price") or payload.get("current_price") or payload.get("pre_close")
+    for field in ("price", "open", "high", "low", "pre_close", "limit_up", "limit_down", "avg_price"):
+        if field in payload:
+            payload[field] = _normalize_price_by_reference(payload.get(field), reference_price)
     payload["source"] = payload.get("source") or "eastmoney_realtime"
     payload["cached_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     _write_json_cache(_dated_json_cache_path(REALTIME_CACHE_DIR, code), payload)
@@ -425,6 +448,10 @@ def read_realtime_cache(code: str) -> Optional[dict]:
     path = _latest_file_for_code(REALTIME_CACHE_DIR, code, ".json")
     payload = _read_json_cache(path) if path else None
     if isinstance(payload, dict) and payload:
+        reference_price = payload.get("price") or payload.get("current_price") or payload.get("pre_close")
+        for field in ("price", "open", "high", "low", "pre_close", "limit_up", "limit_down", "avg_price"):
+            if field in payload:
+                payload[field] = _normalize_price_by_reference(payload.get(field), reference_price)
         payload["source"] = "cache_file"
         payload["cache_path"] = path
         state_store.set_realtime(code, payload)
@@ -474,6 +501,8 @@ def read_intraday_cache(code: str) -> list:
     try:
         df = pd.read_csv(path)
         if df.empty:
+            return []
+        if "source" in df.columns and str(df["source"].iloc[0]) == "estimated":
             return []
         df["source"] = "cache_file"
         df["cache_path"] = path
@@ -975,21 +1004,24 @@ def _validate_realtime_samples(code: str, samples: dict) -> tuple[Optional[dict]
             b = _to_float(peer.get(field))
             if a > 0 and b > 0 and _relative_close(a, b, 0.003 if field in ("price", "open", "high", "low", "pre_close") else 0.08):
                 primary[field] = round((a + b) / 2, 4 if field == "pct_change" else 2)
-        for field in (
-            "bid_price1", "bid_volume1", "bid_price2", "bid_volume2", "bid_price3", "bid_volume3",
-            "bid_price4", "bid_volume4", "bid_price5", "bid_volume5",
-            "ask_price1", "ask_volume1", "ask_price2", "ask_volume2", "ask_price3", "ask_volume3",
-            "ask_price4", "ask_volume4", "ask_price5", "ask_volume5",
-            "inner_volume", "outer_volume", "limit_up", "limit_down", "avg_price", "pe_ttm",
-            "pe_dynamic", "pe_static", "pb", "market_cap", "float_market_cap", "total_shares",
-            "float_shares", "entrust_ratio", "amplitude", "turnover_rate", "volume_ratio",
-        ):
-            if not primary.get(field):
-                for source_name in accepted_sources:
-                    value = available.get(source_name, {}).get(field)
-                    if value not in (None, "", 0):
-                        primary[field] = value
-                        break
+
+    supplemental_fields = (
+        "bid_price1", "bid_volume1", "bid_price2", "bid_volume2", "bid_price3", "bid_volume3",
+        "bid_price4", "bid_volume4", "bid_price5", "bid_volume5",
+        "ask_price1", "ask_volume1", "ask_price2", "ask_volume2", "ask_price3", "ask_volume3",
+        "ask_price4", "ask_volume4", "ask_price5", "ask_volume5",
+        "inner_volume", "outer_volume", "limit_up", "limit_down", "avg_price", "pe_ttm",
+        "pe_dynamic", "pe_static", "pb", "market_cap", "float_market_cap", "total_shares",
+        "float_shares", "entrust_ratio", "amplitude", "turnover_rate", "volume_ratio",
+    )
+    supplemental_sources = accepted_sources + [name for name in ("tencent", "eastmoney", "sina", "ths") if name in available and name not in accepted_sources]
+    for field in supplemental_fields:
+        if not primary.get(field):
+            for source_name in supplemental_sources:
+                value = available.get(source_name, {}).get(field)
+                if value not in (None, "", 0):
+                    primary[field] = value
+                    break
 
     if not agreeing_pairs and len(available) > 1:
         for source, sample in available.items():
@@ -1434,18 +1466,14 @@ def _fetch_realtime_eastmoney_raw(codes: list) -> dict:
                 volume_ratio = float(item.get("f10", 0) or 0)
                 if isinstance(volume_ratio, (int, float)) and volume_ratio > 100:
                     volume_ratio = volume_ratio / 100
-                high = float(item.get("f15", 0) or 0)
-                if isinstance(high, (int, float)) and high > 10000:
-                    high = high / 100
-                low = float(item.get("f16", 0) or 0)
-                if isinstance(low, (int, float)) and low > 10000:
-                    low = low / 100
-                open_price = float(item.get("f17", 0) or 0)
-                if isinstance(open_price, (int, float)) and open_price > 10000:
-                    open_price = open_price / 100
-                pre_close = float(item.get("f18", 0) or 0)
-                if isinstance(pre_close, (int, float)) and pre_close > 10000:
-                    pre_close = pre_close / 100
+                high = _normalize_price_by_reference(item.get("f15", 0), price)
+                low = _normalize_price_by_reference(item.get("f16", 0), price)
+                open_price = _normalize_price_by_reference(item.get("f17", 0), price)
+                pre_close = _normalize_price_by_reference(item.get("f18", 0), price)
+                if price > 0 and pre_close > 0:
+                    calc_pct_change = round((price - pre_close) / pre_close * 100, 4)
+                    if abs(pct_change - calc_pct_change) > 5:
+                        pct_change = calc_pct_change
 
                 results[code] = {
                     "code": code,
@@ -2187,95 +2215,6 @@ def _safe_float(value, default=0.0):
         return default
 
 
-def _build_fallback_minutes(code: str) -> list:
-    realtime = state_store.get_realtime(code) or {}
-    if not realtime:
-        fetch_realtime_batch([code])
-        realtime = state_store.get_realtime(code) or {}
-
-    base_price = _safe_float(realtime.get("price") or realtime.get("pre_close") or 10, 10)
-    pre_close = _safe_float(realtime.get("pre_close") or base_price, base_price)
-    seed = int(re.sub(r"\D", "", code) or 1)
-    rng = random.Random(seed)
-    minutes = []
-    price = pre_close
-    start = datetime.now().replace(hour=9, minute=30, second=0, microsecond=0)
-
-    for i in range(241):
-        if i <= 120:
-            dt = start + timedelta(minutes=i)
-        else:
-            dt = start.replace(hour=13, minute=0) + timedelta(minutes=i - 121)
-        drift = (base_price - price) * 0.025
-        wave = math.sin((i + seed % 17) / 18) * base_price * 0.0015
-        noise = rng.uniform(-base_price * 0.001, base_price * 0.001)
-        price = max(price + drift + wave + noise, 0.01)
-        avg_price = (pre_close * max(0, 240 - i) + price * (i + 1)) / 241
-        volume = int(500 + rng.random() * 3000 + i * 8)
-        amount = volume * price * 100
-        minutes.append({
-            "time": dt.strftime("%Y-%m-%d %H:%M"),
-            "price": round(price, 2),
-            "avg_price": round(avg_price, 2),
-            "volume": volume,
-            "amount": round(amount, 2),
-            "pct_change": round((price - pre_close) / pre_close * 100, 2) if pre_close else 0,
-            "source": "estimated",
-        })
-
-    return minutes
-
-
-def _build_fallback_kline(code: str, period: int = 101, days: int = 120) -> pd.DataFrame:
-    realtime = state_store.get_realtime(code) or {}
-    if not realtime:
-        fetch_realtime_batch([code])
-        realtime = state_store.get_realtime(code) or {}
-
-    base_price = float(realtime.get("price") or realtime.get("pre_close") or 10)
-    seed = int(re.sub(r"\D", "", code) or 1) + int(period)
-    rng = random.Random(seed)
-    rows = []
-    close = max(base_price * (1 - 0.0015 * days), 0.01)
-    now = datetime.now()
-
-    for i in range(days):
-        if period >= 101:
-            dt = now - timedelta(days=days - i - 1)
-            date_value = dt.strftime("%Y-%m-%d")
-        else:
-            dt = now - timedelta(minutes=(days - i - 1) * period)
-            date_value = dt.strftime("%Y-%m-%d %H:%M")
-
-        drift = (base_price - close) * 0.03
-        wave = math.sin((i + seed % 31) / 6) * base_price * 0.006
-        noise = rng.uniform(-base_price * 0.004, base_price * 0.004)
-        open_price = close
-        close = max(open_price + drift + wave + noise, 0.01)
-        high = max(open_price, close) * (1 + rng.uniform(0.001, 0.012))
-        low = min(open_price, close) * (1 - rng.uniform(0.001, 0.012))
-        volume = int(80000 + rng.random() * 220000 + i * 300)
-        amount = volume * close * 100
-        pct_change = ((close - open_price) / open_price * 100) if open_price else 0
-
-        rows.append({
-            "date": date_value,
-            "open": round(open_price, 2),
-            "close": round(close, 2),
-            "high": round(high, 2),
-            "low": round(low, 2),
-            "volume": volume,
-            "amount": round(amount, 2),
-            "amplitude": round((high - low) / open_price * 100, 2) if open_price else 0,
-            "pct_change": round(pct_change, 2),
-            "change": round(close - open_price, 2),
-            "turnover_rate": round(rng.uniform(0.5, 4.5), 2),
-            "source": "estimated",
-        })
-
-    return pd.DataFrame(rows)
-
-
 # ==================== 分时数据 ====================
 
 def fetch_intraday_minutes(code: str, allow_fallback: bool = False) -> list:
@@ -2291,7 +2230,7 @@ def fetch_intraday_minutes(code: str, allow_fallback: bool = False) -> list:
         "ndays": 1,
     }
     try:
-        resp = requests.get(url, params=params, headers=HEADERS, timeout=10)
+        resp = requests.get(url, params=params, headers=HEADERS, timeout=4)
         data = resp.json()
         trends = data.get("data", {}).get("trends", [])
         pre_close = data.get("data", {}).get("preClose", 0)
@@ -2313,21 +2252,14 @@ def fetch_intraday_minutes(code: str, allow_fallback: bool = False) -> list:
                     "source": "eastmoney_trends",
                 })
         if not minutes:
-            if not allow_fallback:
-                return read_intraday_cache(code)
-            minutes = _build_fallback_minutes(code)
+            return read_intraday_cache(code)
         if minutes:
             state_store.set_intraday(code, minutes)
-            if minutes[0].get("source") != "estimated":
-                _write_intraday_cache(code, minutes)
+            _write_intraday_cache(code, minutes)
         return minutes
     except Exception as e:
         logger.warning(f"获取分时数据失败 {code}: {e}")
-        if not allow_fallback:
-            return read_intraday_cache(code)
-        minutes = _build_fallback_minutes(code)
-        state_store.set_intraday(code, minutes)
-        return minutes
+        return read_intraday_cache(code)
 
 
 # ==================== 多周期K线 ====================
@@ -2359,19 +2291,12 @@ def fetch_kline(code: str, period: int = 101, days: int = 120, allow_fallback: b
             cached = _read_kline_cache(code, period, days)
             if cached is not None:
                 return cached
-            if not allow_fallback:
-                return None
-            if candidate_df is not None and not candidate_df.empty:
-                state_store.set_kline(code, 101, candidate_df)
-                state_store.set_daily_bars(code, candidate_df)
-                return candidate_df
+            return None
         except Exception as e:
             logger.warning(f"历史K线可信校验失败 {code}: {e}")
             cached = _read_kline_cache(code, period, days)
             if cached is not None:
                 return cached
-            if not allow_fallback:
-                return None
     _rate_limit("push2his.eastmoney.com")
     secid = _get_secid(code)
     url = "https://push2his.eastmoney.com/api/qt/stock/kline/get"
@@ -2392,13 +2317,7 @@ def fetch_kline(code: str, period: int = 101, days: int = 120, allow_fallback: b
             cached = _read_kline_cache(code, period, days)
             if cached is not None:
                 return cached
-            if not allow_fallback:
-                return None
-            df = _build_fallback_kline(code, period, days)
-            state_store.set_kline(code, period, df)
-            if period == 101:
-                state_store.set_daily_bars(code, df)
-            return df
+            return None
 
         rows = []
         for line in klines:
@@ -2436,13 +2355,7 @@ def fetch_kline(code: str, period: int = 101, days: int = 120, allow_fallback: b
         cached = _read_kline_cache(code, period, days)
         if cached is not None:
             return cached
-        if not allow_fallback:
-            return None
-        df = _build_fallback_kline(code, period, days)
-        state_store.set_kline(code, period, df)
-        if period == 101:
-            state_store.set_daily_bars(code, df)
-        return df
+        return None
 
 
 # ==================== 筹码分布（近似计算） ====================

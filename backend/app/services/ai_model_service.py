@@ -306,11 +306,17 @@ def update_risk_verifier_config(
 
     verifier["provider"] = provider_id
     verifier["provider_name"] = PROVIDERS[provider_id]["name"]
-    verifier["base_url"] = normalized_url
+    if normalized_url:
+        verifier["base_url"] = normalized_url
+    elif not verifier.get("base_url"):
+        verifier["base_url"] = ""
     if api_key and "..." not in api_key:
         verifier["api_key"] = api_key
     selected_model = (selected_model or "").strip()
-    verifier["selected_model"] = selected_model
+    if selected_model:
+        verifier["selected_model"] = selected_model
+    else:
+        selected_model = verifier.get("selected_model", "")
     if selected_model:
         models = verifier.get("available_models") or []
         known_ids = {m.get("id") for m in models if isinstance(m, dict)}

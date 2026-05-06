@@ -19,8 +19,9 @@ RISK_CONFIG = {
     "max_daily_loss_pct": 0.03,            # 日亏损3%暂停交易
     "max_single_trade_amount": 40000.0,    # 单笔最大4万
     "min_trade_amount": 5000.0,            # 单笔最小5000
-    "commission_rate": 0.00025,            # 佣金万2.5
+    "commission_rate": 0.0003,             # 佣金万三
     "stamp_tax_rate": 0.0005,              # 印花税万5（卖出）
+    "transfer_fee_rate": 0.00001,          # 过户费十万分之一
     "min_commission": 5.0,                 # 最低佣金5元
     "cooldown_after_sell_minutes": 30,     # 卖出后30分钟冷却
     "max_daily_trades": 20,                # 每日最多20笔
@@ -188,10 +189,12 @@ def calculate_fees(side: str, price: float, quantity: int) -> dict:
     amount = price * quantity
     commission = max(amount * RISK_CONFIG["commission_rate"], RISK_CONFIG["min_commission"])
     stamp_tax = amount * RISK_CONFIG["stamp_tax_rate"] if side == "sell" else 0
-    total_fee = commission + stamp_tax
+    transfer_fee = amount * RISK_CONFIG.get("transfer_fee_rate", 0.00001)
+    total_fee = commission + stamp_tax + transfer_fee
     return {
         "commission": round(commission, 2),
         "stamp_tax": round(stamp_tax, 2),
+        "transfer_fee": round(transfer_fee, 2),
         "total_fee": round(total_fee, 2),
     }
 

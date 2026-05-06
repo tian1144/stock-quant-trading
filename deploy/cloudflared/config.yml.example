@@ -3,5 +3,5 @@ credentials-file: C:\Users\Administrator\.cloudflared\<TUNNEL_ID>.json
 
 ingress:
   - hostname: www.lianghuagongju222333.com
-    service: http://localhost:8000
+    service: http://127.0.0.1:8000
   - service: http_status:404

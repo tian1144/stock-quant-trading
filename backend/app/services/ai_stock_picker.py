@@ -1,9 +1,9 @@
-"""
+﻿"""
 AI assisted stock picker.
 
 The service keeps the quant engine as the first filter, then asks the configured
-model to review only compact evidence. If the model is unavailable, it returns a
-deterministic fallback so the H5 preview remains usable and testable.
+model to review only compact evidence. If the model is unavailable, it returns
+an explicit error or local ranking over real candidates only.
 """
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -14,18 +14,6 @@ import pandas as pd
 from app.analysis.decision_schema import generate_decision, generate_score_card
 from app.analysis.risk_review import full_risk_pipeline
 from app.services import ai_model_service, data_fetcher, state_store, stock_screener, technical_analysis, disclosure_service
-
-
-DEMO_FALLBACK_STOCKS = [
-    {"code": "600519", "name": "贵州茅台", "market": "主板", "industry": "白酒", "is_st": False, "price": 1688.00, "pct_change": 1.26, "volume": 32600, "amount": 5500000000.0},
-    {"code": "300750", "name": "宁德时代", "market": "创业板", "industry": "新能源", "is_st": False, "price": 212.35, "pct_change": -0.84, "volume": 185000, "amount": 3920000000.0},
-    {"code": "601318", "name": "中国平安", "market": "主板", "industry": "保险", "is_st": False, "price": 48.72, "pct_change": 0.38, "volume": 420000, "amount": 2040000000.0},
-    {"code": "000858", "name": "五粮液", "market": "主板", "industry": "白酒", "is_st": False, "price": 143.18, "pct_change": 0.92, "volume": 156000, "amount": 2230000000.0},
-    {"code": "600036", "name": "招商银行", "market": "主板", "industry": "银行", "is_st": False, "price": 36.28, "pct_change": 0.67, "volume": 510000, "amount": 1850000000.0},
-    {"code": "002594", "name": "比亚迪", "market": "主板", "industry": "汽车", "is_st": False, "price": 226.40, "pct_change": -1.12, "volume": 198000, "amount": 4480000000.0},
-    {"code": "688981", "name": "中芯国际", "market": "科创板", "industry": "半导体", "is_st": False, "price": 55.66, "pct_change": 2.18, "volume": 690000, "amount": 3840000000.0},
-    {"code": "601899", "name": "紫金矿业", "market": "主板", "industry": "有色金属", "is_st": False, "price": 18.92, "pct_change": 1.74, "volume": 980000, "amount": 1850000000.0},
-]
 
 
 BUCKETS = list(range(-10, 11))
@@ -76,6 +64,36 @@ def _to_float(value, default: float = 0.0) -> float:
 
 def _clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
     return max(low, min(high, value))
+
+
+def _capital_structure_reason(flow: Optional[dict]) -> str:
+    flow = flow or {}
+    if flow.get("data_status") != "ready":
+        return "主力/散户占比待确认"
+    main_ratio = max(0.0, _to_float(flow.get("main_ratio_pct")))
+    retail_ratio = max(0.0, _to_float(flow.get("retail_ratio_pct")))
+    large_ratio = max(0.0, _to_float(flow.get("large_ratio_pct")))
+    institution_ratio = max(0.0, _to_float(flow.get("institution_ratio_pct")))
+    money_flow_ratio = _to_float(flow.get("money_flow_ratio_pct"), 0)
+    pressure = _to_float(flow.get("retail_pressure"), 50)
+    conclusion = "资金结构中性"
+    if main_ratio > 10 and pressure <= 58:
+        conclusion = "主力占优且散户压力不高"
+    elif main_ratio < -10 and pressure >= 58:
+        conclusion = "主力流出且散户压力偏高"
+    elif retail_ratio > 15 and main_ratio <= 0:
+        conclusion = "散户/中单占比偏高"
+    elif retail_ratio < -15 and main_ratio >= 0:
+        conclusion = "浮筹释放后需观察主力承接"
+    return (
+        f"主力净流入{_to_float(flow.get('main_net_inflow')):.0f}，"
+        f"主力占比{main_ratio:.1f}%，"
+        f"散户/中单占比{retail_ratio:.1f}%，"
+        f"机构/基金占比{institution_ratio:.1f}%，"
+        f"游资/大单占比{large_ratio:.1f}%，"
+        f"资金净流向占比{money_flow_ratio:.1f}%，"
+        f"散户压力{pressure:.1f}，{conclusion}"
+    )
 
 
 def _json_safe(value):
@@ -185,9 +203,9 @@ def _probability_ladder(stock: dict, score_card: dict, decision: dict, risk: dic
     rows = []
     for bucket, weight in zip(BUCKETS, raw):
         if bucket == 10:
-            label = "涨停附近"
+            label = "娑ㄥ仠闄勮繎"
         elif bucket == -10:
-            label = "跌停附近"
+            label = "璺屽仠闄勮繎"
         elif bucket >= 0:
             label = f"涨{bucket}%到{min(bucket + 1, 10)}%"
         else:
@@ -233,6 +251,7 @@ def _candidate_evidence(stock: dict, strategy: str) -> dict:
         "ai_quality_label": stock.get("ai_quality_label"),
         "ai_quality_reason": stock.get("ai_quality_reason"),
         "ai_quality_priority": stock.get("ai_quality_priority"),
+        "support_pool_status": stock.get("support_pool_status"),
         "signal_type": stock.get("signal_type"),
         "risk_level": stock.get("risk_level"),
         "reason": stock.get("reason", ""),
@@ -245,6 +264,7 @@ def _candidate_evidence(stock: dict, strategy: str) -> dict:
         "retail_institution_flow": retail_flow,
         "disclosure_risk": disclosure,
         "youzi_experience": (stock.get("screening_logic") or {}).get("youzi_experience", {}),
+        "support_pullback": (stock.get("screening_logic") or {}).get("support_pullback", {}),
         "evidence": detail,
     }
 
@@ -278,7 +298,9 @@ def _fallback_review(items: List[dict]) -> List[dict]:
         if youzi.get("position_advice"):
             reasons.append(f"仓位纪律:{youzi.get('position_advice')}")
         if youzi.get("notes"):
-            reasons.append("游资复核:" + "、".join(str(x) for x in youzi.get("notes", [])[:3]))
+            reasons.append("游资复核:" + "；".join(str(x) for x in youzi.get("notes", [])[:3]))
+        capital_reason = _capital_structure_reason(item.get("retail_institution_flow") or (item.get("evidence") or {}).get("capital_structure"))
+        reasons.append(capital_reason)
         if item.get("ai_quality_reason"):
             reasons.append(str(item.get("ai_quality_reason"))[:80])
         if not approved:
@@ -314,7 +336,7 @@ def _merge_ai_review(items: List[dict], ai_payload: dict) -> List[dict]:
             "trade_plan": plan,
             "probability_ladder": ladder,
             "ai_rank_score": round(_to_float(row.get("ai_rank_score"), _to_float(base.get("score"), 50)), 1),
-            "ai_action": row.get("ai_action") or "AI建议观察",
+            "ai_action": row.get("ai_action") or "AI寤鸿瑙傚療",
             "youzi_quality_view": row.get("youzi_quality_view") or "",
             "ai_reason": row.get("ai_reason") or row.get("youzi_quality_view") or base.get("reason", ""),
             "ai_risks": row.get("ai_risks") or [],
@@ -339,6 +361,27 @@ def _is_buy_recommendation(item: dict) -> bool:
     if any(word in action_text for word in ("推荐购买", "可小仓", "试单", "买入")):
         return rank_score >= 65 and bool(plan.get("suggested_buy_price") or plan.get("suggested_buy_time"))
     return rank_score >= 72 and bool(plan.get("suggested_buy_price") or plan.get("suggested_buy_time"))
+
+
+def _passes_short_box_gate(item: dict, strategy: str) -> tuple[bool, str]:
+    if strategy != "short":
+        return True, ""
+    support = item.get("support_pullback") or {}
+    status = item.get("support_pool_status")
+    if status != "support_pool":
+        return False, "短线策略只允许严格箱体震荡支撑池进入推荐购买。"
+    if support.get("box_pattern_ready") is not True:
+        return False, "缺少多次触顶回落、触底反弹和中轴反复切换，不能按震荡股买入。"
+    if support.get("repeated_range_ready") is not True:
+        return False, "未达到一个月1.5次、三个月3次的上下沿往返震荡。"
+    if _to_float(support.get("complete_swings_60"), 0) < 3 or _to_float(support.get("complete_swings_22"), 0) < 1.5:
+        return False, "区间震荡频率不足，时间间隔过久。"
+    upper = int(_to_float(support.get("upper_touch_count"), 0))
+    lower = int(_to_float(support.get("lower_touch_count"), 0))
+    crosses = int(_to_float(support.get("mid_cross_count"), 0))
+    if upper < 2 or lower < 2 or crosses < 3:
+        return False, "箱体震荡次数不足，疑似单边回落或弱反抽。"
+    return True, ""
 
 
 def _force_best_buy_recommendations(items: List[dict], target: int = 3) -> List[dict]:
@@ -369,7 +412,7 @@ def _force_best_buy_recommendations(items: List[dict], target: int = 3) -> List[
             "ai_action": "可小仓试单",
             "holding_style": item.get("holding_style") or "短期",
             "recommend_buy": True,
-            "ai_reason": f"{reason}；全市场没有出现完美买点，本条为复核池内相对最优试单，需模拟盘和人工二次确认。",
+            "ai_reason": f"{reason}；全市场没有出现完美买点，本条为复核池内相对最优试单，需要模拟盘和人工二次确认。",
         })
         promoted.append(item)
         if len(promoted) >= target:
@@ -410,7 +453,7 @@ def _build_focus_candidates(codes: List[str], screening: List[dict]) -> List[dic
         stock.setdefault("screening_logic", {})
         stock.setdefault("signal_type", "watch")
         stock.setdefault("risk_level", "medium")
-        stock.setdefault("reason", "关注股票AI选股候选，来自自选、智能筛选或短线震荡池")
+        stock.setdefault("reason", "关注股票AI选股候选，来自自选、智能筛选或短线震荡池。")
         candidates.append(stock)
     return candidates
 
@@ -538,7 +581,7 @@ def _youzi_adjusted_quality_score(raw_score: float, stock: dict) -> float:
         adjusted -= 5
     if youzi.get("tape_status") == "overheated":
         adjusted -= 6
-    if youzi.get("position_advice") in ("空仓或仅观察", "观察"):
+    if youzi.get("position_advice") in ("绌轰粨鎴栦粎瑙傚療", "瑙傚療"):
         adjusted -= 4
     if youzi.get("sector_confirmed") and youzi.get("main_retail_confirmed"):
         adjusted += 3
@@ -577,7 +620,7 @@ def _merge_quality_scores(candidates: List[dict], ai_payloads: List[dict]) -> Li
                 "ai_quality_priority": row.get("priority") or ("review" if score >= 65 else "watch"),
             }
         else:
-            stock = _fallback_quality_scores([stock], reason="该批次AI未返回该股，使用本地量化分补齐")[0]
+            stock = _fallback_quality_scores([stock], reason="该批次AI未返回该股，使用本地真实数据计算分补齐")[0]
         merged.append(stock)
     return sorted(merged, key=lambda x: _to_float(x.get("ai_quality_score"), _to_float(x.get("quality_score"))), reverse=True)
 
@@ -585,9 +628,9 @@ def _merge_quality_scores(candidates: List[dict], ai_payloads: List[dict]) -> Li
 def _ai_quality_score_candidates(candidates: List[dict], strategy: str, scope: str, progress_callback=None) -> tuple[List[dict], dict]:
     candidates = sorted(candidates or [], key=lambda x: _to_float(x.get("quality_score") or x.get("score")), reverse=True)
     if not candidates:
-        return [], {"ok": False, "used_ai": False, "batch_count": 0, "error": "候选池为空"}
+        return [], {"ok": False, "used_ai": False, "batch_count": 0, "error": "鍊欓€夋睜涓虹┖"}
     policy = ai_model_service.get_task_policy("ai_quality_scoring")
-    batch_size = max(20, int(policy.get("max_context_events", 120) or 120))
+    batch_size = 50
     schema_hint = """{
   "summary": {"method": "AI分批质量打分说明"},
   "scores": [{
@@ -595,18 +638,22 @@ def _ai_quality_score_candidates(candidates: List[dict], strategy: str, scope: s
     "ai_quality_score": 0-100,
     "ai_quality_label": "合格/观察/剔除",
     "priority": "review/watch/reject",
+    "capital_structure_view": "主力占比/散户中单占比/散户压力/资金结构结论",
     "youzi_quality_view": "情绪周期/主线板块/龙头地位/盘口承接/仓位纪律判断",
-    "ai_quality_reason": "必须综合新闻、财报/估值、成交量、K线、资金、板块、游资经验和风控风险"
+    "ai_quality_reason": "综合真实行情、真实缓存、计算指标、新闻公告、资金、风控和游资经验后的AI计算建议"
   }]
 }"""
+    capital_prompt = "必须使用 retail_institution_flow/capital_structure 分析主力和散户占比，并说明主力占比、散户中单占比、散户压力和资金结构结论。"
     system_prompt = (
-        "你是A股全候选质量评分模型。你不是最终下单模型，只负责对第二阶段候选池逐只打质量分。"
-        "必须综合量价、K线、成交额、资金流、板块热度、新闻公告、估值财务缺口、风险等级。"
-        "额外使用游资交割单经验评分：情绪周期、主线板块、龙头/次龙头地位、盘口承接、公告是否被板块确认、仓位赢面纪律。"
+        "你是A股候选质量评分模型，只负责基于真实行情、真实缓存和计算指标对候选池逐只打分。"
+        "AI给出的分数、买卖点倾向、概率和风险判断只能作为AI计算建议，不能冒充原始行情数据。"
+        "必须综合量价、K线、成交额、资金流、板块热度、新闻公告、估值财务可用性、风险等级。"
+        "额外使用游资交割单经验评分：情绪周期、主线板块、龙头/次龙头地位、盘口承接、公告是否被板块确认、仓位纪律。"
         "不要只按本地排名照抄，新闻/财报/资金/K线冲突时要主动降分。"
         "只返回输入候选中的股票，输出JSON。"
     )
     payloads = []
+    system_prompt += capital_prompt
     system_prompt = (
         system_prompt
         + "必须额外评估个股主力/散户占比、大盘主力散户情绪、公告财报风险、相似规则历史回测有效性和youzi_experience。"
@@ -618,20 +665,25 @@ def _ai_quality_score_candidates(candidates: List[dict], strategy: str, scope: s
         "task_key": "ai_quality_scoring",
         "batch_size": batch_size,
         "batch_count": 0,
+        "completed_count": 0,
+        "total_count": 0,
         "candidate_count": len(candidates),
         "max_workers": 0,
         "errors": [],
     }
     chunks = [(start, candidates[start:start + batch_size]) for start in range(0, len(candidates), batch_size)]
-    max_workers = min(4, max(1, len(chunks)))
+    max_workers = 1
     meta["max_workers"] = max_workers
     meta["batch_total"] = len(chunks)
+    meta["total_count"] = len(chunks)
     if progress_callback:
         progress_callback({
             "stage": "ai_quality_scoring",
-            "message": f"AI质量打分开始：共{len(candidates)}只候选，分{len(chunks)}批",
+            "message": f"AI质量打分开始：0/{len(candidates)}",
             "batch_done": 0,
             "batch_total": len(chunks),
+            "completed_count": 0,
+            "total_count": len(chunks),
             "candidate_count": len(candidates),
         })
 
@@ -642,10 +694,12 @@ def _ai_quality_score_candidates(candidates: List[dict], strategy: str, scope: s
             system_prompt,
             {
                 "strategy": strategy,
-                "scope": "所有股票选股" if scope == "all" else "关注股票选股",
+                "scope": "鎵€鏈夎偂绁ㄩ€夎偂" if scope == "all" else "鍏虫敞鑲＄エ閫夎偂",
                 "market_retail_institution_mood": _market_retail_institution_mood(),
                 "batch_index": start // batch_size + 1,
                 "batch_total": (len(candidates) + batch_size - 1) // batch_size,
+                "candidate_index": start + 1,
+                "candidate_total": len(candidates),
                 "candidates": compact,
                 "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             },
@@ -657,6 +711,7 @@ def _ai_quality_score_candidates(candidates: List[dict], strategy: str, scope: s
         for future in as_completed(futures):
             payload, call_meta = future.result()
             meta["batch_count"] += 1
+            meta["completed_count"] = meta["batch_count"]
             meta["used_ai"] = bool(meta["used_ai"] or (call_meta or {}).get("used_ai"))
             if payload:
                 payloads.append(payload)
@@ -665,9 +720,11 @@ def _ai_quality_score_candidates(candidates: List[dict], strategy: str, scope: s
             if progress_callback:
                 progress_callback({
                     "stage": "ai_quality_scoring",
-                    "message": f"AI质量打分进行中：已完成{meta['batch_count']}/{len(chunks)}批",
+                    "message": f"AI质量打分进行中：{meta['completed_count']}/{len(chunks)}",
                     "batch_done": meta["batch_count"],
                     "batch_total": len(chunks),
+                    "completed_count": meta["completed_count"],
+                    "total_count": len(chunks),
                     "candidate_count": len(candidates),
                     "used_ai": meta["used_ai"],
                     "errors": meta["errors"][-3:],
@@ -677,7 +734,7 @@ def _ai_quality_score_candidates(candidates: List[dict], strategy: str, scope: s
     meta["ok"] = bool(payloads) or not ai_model_service.is_ready()
     if not payloads:
         meta["used_ai"] = False
-        meta["error"] = meta["errors"][0] if meta["errors"] else "AI质量打分未返回，已降级"
+        meta["error"] = meta["errors"][0] if meta["errors"] else "AI质量打分未返回，已使用本地真实数据计算分"
     return ranked, meta
 
 
@@ -749,8 +806,9 @@ def run_ai_stock_picking(
         progress_callback({"stage": "prepare", "message": "正在准备股票池与行情缓存"})
     screening = state_store.get_screening_results()
     if not state_store.get_stock_universe():
-        stocks = data_fetcher.read_stock_universe_cache() or DEMO_FALLBACK_STOCKS
-        state_store.update_stock_universe(stocks)
+        stocks = data_fetcher.read_stock_universe_cache() or []
+        if stocks:
+            state_store.update_stock_universe(stocks)
         codes = [s.get("code") for s in stocks[: min(len(stocks), 80)] if s.get("code")]
         if codes:
             try:
@@ -766,19 +824,13 @@ def run_ai_stock_picking(
             progress_callback({"stage": "quant_screening", "message": "正在执行关注池量化筛选"})
         screening = stock_screener.run_screening(strategy=strategy)
     if not screening:
-        demo = []
-        realtime = state_store.get_all_realtime()
-        for stock in DEMO_FALLBACK_STOCKS:
-            merged = {**stock, **(realtime.get(stock["code"]) or {})}
-            merged.setdefault("score", 55)
-            merged.setdefault("quality_score", 55)
-            merged.setdefault("score_detail", {})
-            merged.setdefault("screening_logic", {})
-            merged.setdefault("signal_type", "watch")
-            merged.setdefault("risk_level", "medium")
-            merged.setdefault("reason", "股票池为空时的演示候选，需等待真实行情缓存补齐")
-            demo.append(merged)
-        screening = demo
+        return _persist_ai_error_result(
+            "股票池或真实行情数据缺失，本次不生成AI候选。",
+            strategy=strategy,
+            scope=scope,
+            focus_codes=focus_codes,
+            candidate_source=[],
+        )
     if scope == "focus" and focus_codes:
         candidate_source = _build_focus_candidates(focus_codes, screening)
     elif scope == "focus":
@@ -831,6 +883,8 @@ def run_ai_stock_picking(
             "candidate_count": len(candidates),
             "batch_done": quality_meta.get("batch_count", 0),
             "batch_total": quality_meta.get("batch_total", quality_meta.get("batch_count", 0)),
+            "completed_count": quality_meta.get("completed_count", quality_meta.get("batch_count", 0)),
+            "total_count": quality_meta.get("total_count", quality_meta.get("candidate_count", 0)),
         })
     evidence_items = [_candidate_evidence(stock, strategy) for stock in candidates]
 
@@ -872,19 +926,21 @@ def run_ai_stock_picking(
             "trade_plan": item.get("trade_plan", {}),
             "probability_ladder": item.get("probability_ladder", []),
             "evidence": item.get("evidence", {}),
+            "retail_institution_flow": item.get("retail_institution_flow", {}),
             "youzi_experience": item.get("youzi_experience", {}),
         })
 
     system_prompt = (
         "你是A股量化投研风控助手。只从给定候选中选择，不能编造不存在的数据。"
         "目标是小型低频猎人策略：优先高质量信号、支撑位低吸、资金和新闻确认、严格风控。"
-        "必须使用游资经验字段复核：情绪周期、主线板块、龙头地位、盘口承接、公告是否被板块确认、仓位赢面建议。"
+        "必须使用游资经验字段复核：情绪周期、主线板块、龙头地位、盘口承接、公告是否被板块确认、仓位建议。"
         "必须输出JSON，且每个推荐必须说明K线、成交量/成交额、公司业绩或暴雷风险、新闻公告、风控依据。"
-        "真实下单默认禁止，结论只作为模拟盘信号。"
+        "AI给出的建议买点、卖点、概率和复核结论是AI计算建议，不是原始行情数据。真实下单默认禁止，结论只作为模拟盘信号。"
     )
+    capital_prompt = "必须使用 retail_institution_flow/capital_structure 分析主力和散户占比，并说明主力占比、散户中单占比、散户压力和资金结构结论。"
     ai_payload, ai_meta = ai_model_service.chat_json(
         "trade_decision",
-        system_prompt,
+        capital_prompt + system_prompt,
         {
             "strategy": strategy,
             "scope": "所有股票选股" if scope == "all" else "关注股票选股",
@@ -923,11 +979,13 @@ def run_ai_stock_picking(
     for item in reviewed_all:
         item["analysis_type"] = "auto_ai_pick"
         item["recommend_buy"] = _is_buy_recommendation(item)
+        passes_box_gate, gate_reason = _passes_short_box_gate(item, strategy)
+        if not passes_box_gate:
+            item["recommend_buy"] = False
+            item["ai_action"] = "等待箱体震荡确认"
+            item["ai_reason"] = f"{item.get('ai_reason') or ''}；{gate_reason}".strip("；")
+            item["short_box_gate_reason"] = gate_reason
     reviewed = [item for item in reviewed_all if item.get("recommend_buy")][:limit]
-    if scope == "all" and len(reviewed) < 2:
-        existing_codes = {item.get("code") for item in reviewed}
-        promoted = _force_best_buy_recommendations([item for item in reviewed_all if item.get("code") not in existing_codes], target=3 - len(reviewed))
-        reviewed.extend(promoted)
     generated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     expires_at = (datetime.now() + timedelta(minutes=30)).strftime("%Y-%m-%d %H:%M:%S")
     signals = []
@@ -965,8 +1023,8 @@ def run_ai_stock_picking(
         "reviewed_count": len(reviewed_all),
         "filtered_wait_count": len([item for item in reviewed_all if item.get("code") not in {row.get("code") for row in reviewed}]),
         "summary": (ai_payload or {}).get("summary") if isinstance(ai_payload, dict) else {
-            "market_view": "AI接口未返回有效内容，已使用本地量化规则生成降级推荐。",
-            "method": "量化选股Top候选 + 评分卡 + 决策 + 风控复核 + 概率分布",
+            "market_view": "AI接口未返回有效内容，本次不生成推荐结果。",
+            "method": "量化候选 + AI评分 + 风控复核 + 概率分布",
         },
         "generated_at": generated_at,
         "strategy": strategy,
@@ -995,28 +1053,28 @@ def analyze_single_stock(code: str, strategy: str = "short") -> dict:
     stock.setdefault("screening_logic", {})
     stock.setdefault("signal_type", "watch")
     stock.setdefault("risk_level", "medium")
-    stock.setdefault("reason", "单股AI分析")
+    stock.setdefault("reason", "鍗曡偂AI鍒嗘瀽")
 
     item = _candidate_evidence(stock, strategy)
     schema_hint = """{
-  "code": "股票代码",
+  "code": "鑲＄エ浠ｇ爜",
   "ai_rank_score": 0-100,
-  "ai_action": "推荐购买/短期观察/长期观察/不推荐购买",
-  "holding_style": "短期/长期/短期和长期均不适合",
+  "ai_action": "鎺ㄨ崘璐拱/鐭湡瑙傚療/闀挎湡瑙傚療/涓嶆帹鑽愯喘涔?,
+  "holding_style": "鐭湡/闀挎湡/鐭湡鍜岄暱鏈熷潎涓嶉€傚悎",
   "recommend_buy": true,
-  "ai_reason": "必须引用K线、成交量、业绩/暴雷风险、资金、新闻和风控依据",
-  "ai_risks": ["风险1", "风险2"],
+  "ai_reason": "蹇呴』寮曠敤K绾裤€佹垚浜ら噺銆佷笟缁?鏆撮浄椋庨櫓銆佽祫閲戙€佹柊闂诲拰椋庢帶渚濇嵁",
+  "ai_risks": ["椋庨櫓1", "椋庨櫓2"],
   "trade_plan": {
-    "suggested_buy_time": "建议买入时间",
+    "suggested_buy_time": "寤鸿涔板叆鏃堕棿",
     "suggested_buy_price": 0,
     "suggested_sell_price": 0,
     "stop_loss_price": 0
   },
-  "probability_ladder": [{"range":"跌10%到跌9%","bucket":-10,"probability":0}]
+  "probability_ladder": [{"range":"璺?0%鍒拌穼9%","bucket":-10,"probability":0}]
 }"""
     system_prompt = (
-        "你是A股个股AI投研助手。只能基于给定数据分析，不能编造财务、公告或行情。"
-        "要明确是否推荐购买，偏短期还是长期。若数据不足，要说明缺什么数据。"
+        "你是A股单股AI投研助手。只能基于给定数据分析，不能编造财务、公告或行情。"
+        "要明确是否推荐买入，偏短期还是长期。若数据不足，要说明缺什么数据。"
         "真实下单默认禁止，结论只用于模拟盘和人工复核。必须输出JSON。"
     )
     compact = {
@@ -1038,7 +1096,7 @@ def analyze_single_stock(code: str, strategy: str = "short") -> dict:
     )
     if ai_payload:
         merged = _merge_ai_review([item], {"recommendations": [ai_payload]})[0]
-        merged["holding_style"] = ai_payload.get("holding_style") or ("短期" if strategy == "short" else "长期")
+        merged["holding_style"] = ai_payload.get("holding_style") or ("鐭湡" if strategy == "short" else "闀挎湡")
         merged["recommend_buy"] = bool(ai_payload.get("recommend_buy", False))
     else:
         merged = _fallback_review([item])[0]

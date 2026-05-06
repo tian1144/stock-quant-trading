@@ -15,6 +15,71 @@ from typing import Optional
 
 DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "ai")
 MEMORY_PATH = os.path.join(DATA_DIR, "strategy_memory.json")
+TRADING_MODE_PATH = os.path.join(DATA_DIR, "ai_trading_mode.json")
+
+
+DEFAULT_TRADING_MODE = {
+    "version": "youzi-short-hunter-mode-v1",
+    "updated_at": None,
+    "mode_name": "AI短线猎人交易模式",
+    "source_scope": [
+        "结构化短线课程与交割单摘要",
+        "PDF文字资料摘要",
+        "图片交割单OCR摘要",
+        "视频关键帧OCR摘要",
+        "站内量化筛选与模拟盘复盘",
+    ],
+    "identity": (
+        "先做研究员和模拟盘交易员，不做真实自动下单执行器。"
+        "所有结论必须可解释、可复核、可止损。"
+    ),
+    "core_style": [
+        "围绕情绪周期、主线板块、前排辨识度、盘口承接和仓位纪律做短线概率选择。",
+        "优先低位支撑、回落确认、主线仍在、资金重新承接的机会，不追连续加速后的情绪高点。",
+        "公告、龙虎榜、名人席位和单日异动只能作为线索，必须被板块联动、成交承接和风险检查共同确认。",
+        "亏损或连续判断失败时先降级到观察或小仓模拟，不允许用补仓掩盖错误。",
+    ],
+    "decision_pipeline": [
+        "先看市场赚钱效应：涨跌家数、涨停/跌停、炸板、连板高度、昨日涨停红盘率和主线持续性。",
+        "再看板块：是否有共同上涨、前排带动、后排跟随、资金持续流入，而不是单股孤立冲动。",
+        "再看个股位置：低位箱体、关键均线/支撑附近、回落不过度破位、近5日不过热。",
+        "再看盘口和资金：成交额可执行、换手不过热、主力或大单边际改善，散户压力没有明显放大。",
+        "再看风险：公告/财报/监管/减持/诉讼/退市风险一票否决或降级。",
+        "最后给计划：买点类型、建议买入时间、挂单区间、止损价、失效条件、仓位级别和次日验证点。",
+    ],
+    "setup_taxonomy": {
+        "low_suck": "主线未死、前排或强相关个股回到支撑/均线附近，恐慌释放后出现承接。",
+        "halfway": "趋势和题材仍在，分歧后资金重新确认，但不能是高位缩量硬冲。",
+        "limit_board": "只在情绪、题材、封单、换手、次日溢价条件同时较强时观察，默认不盲目打板。",
+        "reseal": "开板分歧后重新封回，必须检查炸板质量、成交承接和板块同步。",
+        "leader_follow": "龙头或前排确认后，选择位置更好、承接更稳的跟随标的。",
+        "watch_only": "证据不足、位置不舒服、风控不清晰或市场退潮时只观察。",
+    },
+    "scoring_rules": [
+        "AI质量分必须显式说明 youzi_experience：情绪阶段、主线确认、龙头/前排地位、盘口承接、公告是否被板块确认、仓位建议。",
+        "历史相似规则样本不足时保持中性，不把偶然盈利当成规律。",
+        "市场退潮、盘口过热、缺主线、公告无板块确认、仓位建议仅观察时必须降分或进入watch/reject。",
+        "强游资因子只能提高复核优先级，不能绕过风控、公告风险和止损计划。",
+    ],
+    "position_discipline": [
+        "默认真实下单关闭，只生成模拟盘和人工复核信号。",
+        "60分以下只观察；60-70分小仓模拟观察；70-80分中低仓模拟；80分以上也必须逐步验证。",
+        "连续亏损、情绪退潮或买点归因错误时，自动降级仓位建议，不扩大候选池。",
+        "每笔交易必须记录：选择理由、买点类型、是否按计划、次日验证、退出理由和亏损归因。",
+    ],
+    "hard_avoid": [
+        "连续大涨后才用利好解释买入。",
+        "把所有强势股都叫龙头，或把所有下跌都解释成低吸。",
+        "只因龙虎榜席位、游资名号、课程心法或历史战绩提高买入评级。",
+        "公告/财报/监管风险命中时仍硬买。",
+        "买错后补仓摊平、扩大仓位或修改原计划。",
+    ],
+    "learning_boundary": [
+        "未人工校验的OCR交割单只能作为复盘线索，不能直接当成逐笔交易事实或权重训练样本。",
+        "已经验证的模拟盘/交割单样本达到30笔以上，才允许提出小幅因子权重调整建议。",
+        "每次单因子权重调整建议不超过2个百分点，先作为B策略模拟验证。",
+    ],
+}
 
 
 DEFAULT_MEMORY = {
@@ -129,6 +194,15 @@ def _write_json(path: str, payload: dict) -> None:
         json.dump(payload, f, ensure_ascii=False, indent=2)
 
 
+def ensure_trading_mode() -> dict:
+    current = _read_json(TRADING_MODE_PATH)
+    if current:
+        return {**DEFAULT_TRADING_MODE, **current}
+    payload = {**DEFAULT_TRADING_MODE, "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+    _write_json(TRADING_MODE_PATH, payload)
+    return payload
+
+
 def ensure_strategy_memory() -> dict:
     current = _read_json(MEMORY_PATH)
     if current:
@@ -151,7 +225,32 @@ def get_strategy_memory() -> dict:
     return ensure_strategy_memory()
 
 
-def get_model_memory_context(task_key: str = "") -> str:
+def get_trading_mode() -> dict:
+    return ensure_trading_mode()
+
+
+def _mode_lines(mode: dict, task_key: str = "") -> list[str]:
+    taxonomy = mode.get("setup_taxonomy") or {}
+    lines = [
+        f"AI自有交易模式：{mode.get('mode_name')}（{mode.get('version')}）",
+        f"身份边界：{mode.get('identity')}",
+        "核心风格：" + "；".join(mode.get("core_style", [])[:5]),
+        "决策流水线：" + " -> ".join(mode.get("decision_pipeline", [])[:7]),
+        "买点分类：" + "；".join(f"{key}={value}" for key, value in list(taxonomy.items())[:6]),
+        "评分纪律：" + "；".join(mode.get("scoring_rules", [])[:5]),
+        "仓位纪律：" + "；".join(mode.get("position_discipline", [])[:5]),
+        "硬回避：" + "；".join(mode.get("hard_avoid", [])[:5]),
+        "学习边界：" + "；".join(mode.get("learning_boundary", [])[:4]),
+    ]
+    if task_key in ("ai_quality_scoring", "trade_decision", "deep_analysis", "risk_review"):
+        lines.append(
+            "执行本任务时必须把候选归类为 low_suck/halfway/limit_board/reseal/"
+            "leader_follow/watch_only，并说明情绪、主线、前排地位、盘口、风险和仓位。"
+        )
+    return lines
+
+
+def _legacy_model_memory_context(task_key: str = "") -> str:
     memory = ensure_strategy_memory()
     playbook = memory.get("short_term_playbook") or {}
     policy = memory.get("factor_learning_policy") or {}
@@ -183,6 +282,43 @@ def get_model_memory_context(task_key: str = "") -> str:
             lines.append("最近学习笔记：" + " || ".join(note_lines))
     if task_key in ("ai_quality_scoring", "trade_decision", "deep_analysis"):
         lines.append("执行本任务时必须显式考虑 historical_rule、主力/散户结构、公告财报风险和短线位置。")
+    return "\n".join(lines)
+
+
+def get_model_memory_context(task_key: str = "") -> str:
+    memory = ensure_strategy_memory()
+    mode = ensure_trading_mode()
+    playbook = memory.get("short_term_playbook") or {}
+    policy = memory.get("factor_learning_policy") or {}
+    learning_notes = memory.get("learning_notes") or []
+    lines = _mode_lines(mode, task_key)
+    lines.extend([
+        "",
+        f"站内可继承策略记忆版本：{memory.get('version')}",
+        f"适用范围：{memory.get('scope')}",
+    ])
+    if memory.get("principles"):
+        lines.append("旧策略核心原则：" + "；".join(str(x) for x in memory.get("principles", [])[:5]))
+    if playbook.get("preferred_setups"):
+        lines.append("旧偏好形态：" + "；".join(str(x) for x in playbook.get("preferred_setups", [])[:5]))
+    if playbook.get("avoid_setups"):
+        lines.append("旧回避形态：" + "；".join(str(x) for x in playbook.get("avoid_setups", [])[:5]))
+    if policy.get("adjustment_rules"):
+        lines.append("因子学习纪律：" + "；".join(str(x) for x in policy.get("adjustment_rules", [])[:5]))
+    if learning_notes:
+        note_lines = []
+        for note in learning_notes[:3]:
+            title = note.get("title") or note.get("type") or "未命名学习笔记"
+            takeaways = note.get("takeaways") or note.get("principles") or note.get("factor_adjustments") or []
+            if isinstance(takeaways, list):
+                brief = "；".join(str(item) for item in takeaways[:4])
+            else:
+                brief = str(takeaways)
+            if brief:
+                note_lines.append(f"{title}：{brief}")
+        if note_lines:
+            lines.append("最近学习笔记：" + " || ".join(note_lines))
+    lines.append("注意：这是模型无关的站内记忆，不是底层模型微调；所有结论只用于研究、模拟盘和人工复核。")
     return "\n".join(lines)
 
 

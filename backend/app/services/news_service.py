@@ -286,7 +286,17 @@ def get_market_sentiment() -> dict:
 def refresh_news(watchlist_codes: list = None):
     """刷新新闻并更新状态"""
     logger.info("开始刷新新闻...")
-    news = fetch_and_parse_news(watchlist_codes=watchlist_codes)
+    try:
+        news = fetch_and_parse_news(watchlist_codes=watchlist_codes)
+    except Exception as e:
+        logger.warning(f"新闻刷新异常，回退到缓存/归档新闻: {e}")
+        news = ensure_news_loaded()
+        meta = state_store.get_news_meta()
+        state_store.set_news_meta({
+            **meta,
+            "refresh_error": str(e),
+            "cache_fallback": True,
+        })
     if news:
         detect_negative_news()
         sentiment = get_market_sentiment()

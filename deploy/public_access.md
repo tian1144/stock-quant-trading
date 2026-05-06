@@ -6,14 +6,14 @@
 https://www.lianghuagongju222333.com
 ```
 
-本项目当前 H5 与 API 都由本机 `http://localhost:8000` 提供。前端使用相对 API 路径，因此通过公网域名访问后，会自动请求同一域名下的后端接口。
+本项目当前 H5 与 API 都由本机 `http://127.0.0.1:8000` 提供。前端使用相对 API 路径，因此通过公网域名访问后，会自动请求同一域名下的后端接口。
 
 ## 推荐方案：Cloudflare Tunnel
 
 这个方案不要求本机有公网 IP，也不要求路由器做端口映射。外部访问链路是：
 
 ```text
-用户浏览器 -> www.lianghuagongju222333.com -> Cloudflare Tunnel -> 本机 localhost:8000
+用户浏览器 -> www.lianghuagongju222333.com -> Cloudflare Tunnel -> 本机 127.0.0.1:8000
 ```
 
 ## 前置条件
@@ -21,7 +21,7 @@ https://www.lianghuagongju222333.com
 1. 已注册并拥有 `lianghuagongju222333.com`。
 2. 域名 DNS 已接入 Cloudflare。
 3. 本机已安装 `cloudflared`。
-4. 后端服务能在本机访问：`http://localhost:8000/api/v1/health`。
+4. 后端服务能在本机访问：`http://127.0.0.1:8000/api/v1/health`。
 
 如果还没有域名所有权，无法直接启用 `www.lianghuagongju222333.com`。可以先用临时穿透地址测试，等域名和 DNS 准备好后再绑定正式域名。
 
@@ -86,7 +86,7 @@ https://www.lianghuagongju222333.com
 如果只是临时让别人访问，但还没有配置域名，可以运行：
 
 ```powershell
-cloudflared tunnel --url http://localhost:8000
+cloudflared tunnel --url http://127.0.0.1:8000
 ```
 
 命令行会输出一个 `trycloudflare.com` 临时地址。这个地址每次可能变化，不等于正式域名。

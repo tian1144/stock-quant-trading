@@ -78,6 +78,7 @@ def execute_buy(code: str, price: float, quantity: int, reason: str = "") -> dic
         "amount": round(trade_amount, 2),
         "commission": fees["commission"],
         "stamp_tax": fees["stamp_tax"],
+        "transfer_fee": fees.get("transfer_fee", 0),
         "total_fee": fees["total_fee"],
         "total_cost": round(total_cost, 2),
         "reason": reason,
@@ -145,6 +146,7 @@ def execute_sell(code: str, price: float, quantity: int, reason: str = "") -> di
         "amount": round(trade_amount, 2),
         "commission": fees["commission"],
         "stamp_tax": fees["stamp_tax"],
+        "transfer_fee": fees.get("transfer_fee", 0),
         "total_fee": fees["total_fee"],
         "net_amount": round(net_amount, 2),
         "avg_cost": avg_cost,
@@ -305,6 +307,7 @@ def get_trade_statistics() -> dict:
             "total_realized_pnl": 0,
             "total_commission": 0,
             "total_stamp_tax": 0,
+            "total_transfer_fee": 0,
         }
 
     profits = [o["realized_pnl"] for o in sell_orders]
@@ -313,6 +316,7 @@ def get_trade_statistics() -> dict:
     total_pnl = sum(profits)
     total_commission = sum(o.get("commission", 0) for o in orders)
     total_tax = sum(o.get("stamp_tax", 0) for o in orders)
+    total_transfer_fee = sum(o.get("transfer_fee", 0) for o in orders)
 
     return {
         "total_trades": len(orders),
@@ -326,6 +330,7 @@ def get_trade_statistics() -> dict:
         "total_realized_pnl": round(total_pnl, 2),
         "total_commission": round(total_commission, 2),
         "total_stamp_tax": round(total_tax, 2),
+        "total_transfer_fee": round(total_transfer_fee, 2),
     }
 
 

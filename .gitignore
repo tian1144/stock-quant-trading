@@ -65,3 +65,21 @@ desktop.ini
 *.bak
 *.tmp
 temp/
+
+# Runtime state and generated market data
+backend/data/ai/ai_trading_mode.json
+backend/data/agents/
+backend/data/ai/youzi_trade_notes/image_ocr/
+backend/data/ai/youzi_trade_notes/pdf_text/
+backend/data/ai/youzi_trade_notes/video/
+backend/data/ai/youzi_trade_notes/*_candidates.csv
+backend/data/ai/youzi_trade_notes/verified_trade_reviews.csv
+backend/data/ai_trustee/
+backend/data/backtest/
+backend/data/disclosures/
+backend/data/jobs/
+backend/data/news_cache/
+backend/data/reports/
+backend/data/sector_cache/
+backend/portfolio_state.json
+portfolio_state.json

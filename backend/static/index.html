@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>股票量化智能猎人 - H5预览</title>
+  <link rel="icon" type="image/svg+xml" href="/static/assets/qh-icon.svg">
   <style>
     :root {
       --red: #d71920;
@@ -24,7 +25,7 @@
     }
 
     * { box-sizing: border-box; }
-    html, body { margin: 0; min-height: 100%; }
+    html, body { margin: 0; width: 100%; min-height: 100%; overflow-x: hidden; }
     body {
       background: var(--bg);
       color: var(--text);
@@ -36,6 +37,7 @@
       min-height: 100vh;
       display: grid;
       grid-template-columns: 244px minmax(0, 1fr);
+      min-width: 0;
     }
     .sidebar {
       position: sticky;
@@ -55,12 +57,16 @@
     .brand-mark {
       width: 42px;
       height: 42px;
-      border-radius: 10px;
+      border-radius: 0;
       display: grid;
       place-items: center;
-      background: var(--red);
-      color: #fff;
-      font-weight: 900;
+      background: transparent;
+      filter: drop-shadow(0 8px 14px rgba(215, 25, 32, .24));
+    }
+    .brand-mark img {
+      width: 42px;
+      height: 42px;
+      display: block;
     }
     .brand-title { display: block; font-size: 17px; font-weight: 900; }
     .brand-sub { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
@@ -124,7 +130,7 @@
     }
     .tab-btn.active { background: var(--red-2); border-color: #ffd5d7; color: var(--red); }
 
-    .main { min-width: 0; padding: 20px; }
+    .main { min-width: 0; max-width: 100%; padding: 20px; }
     .topbar {
       position: sticky;
       top: 0;
@@ -224,8 +230,42 @@
     }
     .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 4px rgba(20, 128, 68, .12); }
     .dot.halt { background: var(--red); box-shadow: 0 0 0 4px rgba(215, 25, 32, .12); }
+    .trustee-light {
+      width: 13px;
+      height: 13px;
+      border-radius: 50%;
+      display: inline-block;
+      flex: 0 0 auto;
+      background: #a0a8b6;
+      box-shadow: 0 0 0 5px rgba(160, 168, 182, .14);
+    }
+    .trustee-light.red {
+      background: var(--red);
+      box-shadow: 0 0 0 5px rgba(215, 25, 32, .14), 0 0 14px rgba(215, 25, 32, .45);
+    }
+    .trustee-light.green {
+      background: var(--green);
+      box-shadow: 0 0 0 5px rgba(20, 128, 68, .14), 0 0 14px rgba(20, 128, 68, .45);
+    }
+    .trustee-light.gray {
+      background: #a0a8b6;
+      box-shadow: 0 0 0 5px rgba(160, 168, 182, .14);
+    }
+    .trustee-status-pill {
+      min-height: 38px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 11px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      font-weight: 900;
+      color: var(--muted);
+      white-space: nowrap;
+    }
 
-    .section { display: none; animation: fade .16s ease; }
+    .section { display: none; min-width: 0; max-width: 100%; animation: fade .16s ease; }
     .section.active { display: block; }
     @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
     .head {
@@ -237,11 +277,13 @@
     }
     .head h2 { margin: 0; font-size: 24px; }
     .head p { margin: 6px 0 0; color: var(--muted); font-size: 13px; line-height: 1.6; }
-    .grid { display: grid; gap: 14px; }
+    .grid { display: grid; gap: 14px; min-width: 0; max-width: 100%; }
     .cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
     .cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
     .card {
+      min-width: 0;
+      max-width: 100%;
       background: var(--card);
       border: 1px solid var(--line);
       border-radius: 14px;
@@ -280,7 +322,7 @@
     .chip { padding: 7px 10px; border-radius: 999px; background: rgba(255,255,255,.16); border: 1px solid rgba(255,255,255,.24); font-size: 12px; font-weight: 800; }
 
     table { width: 100%; min-width: 720px; border-collapse: collapse; background: #fff; }
-    .table-wrap { overflow: auto; border-radius: 14px; }
+    .table-wrap { max-width: 100%; overflow-x: auto; overflow-y: hidden; border-radius: 14px; -webkit-overflow-scrolling: touch; }
     th {
       padding: 12px 13px;
       background: var(--soft);
@@ -389,9 +431,9 @@
     .agent-log-row { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px; padding: 8px 0; border-bottom: 1px dashed var(--line); font-size: 12px; line-height: 1.5; }
     .agent-log-row:last-child { border-bottom: 0; }
     .agent-log-row span { color: var(--muted); font-family: Menlo, Consolas, monospace; }
-    .sector-layout { display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(360px, .8fr); gap: 14px; }
-    .sector-scroll { max-height: calc(100vh - 260px); overflow-y: auto; overscroll-behavior: contain; }
-    .sector-detail-scroll { max-height: calc(100vh - 260px); overflow-y: auto; overscroll-behavior: contain; padding-right: 4px; }
+    .sector-layout { display: grid; grid-template-columns: minmax(360px, .95fr) minmax(0, 1.05fr); gap: 14px; min-width: 0; max-width: 100%; align-items: start; }
+    .sector-scroll { min-width: 0; max-width: 100%; max-height: calc(100vh - 260px); overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
+    .sector-detail-scroll { min-width: 0; max-width: 100%; max-height: calc(100vh - 260px); overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding-right: 4px; }
     .sector-card { cursor: pointer; transition: border-color .16s ease, box-shadow .16s ease, transform .16s ease; }
     .sector-card:hover { border-color: #ffd0d2; box-shadow: 0 10px 28px rgba(15, 23, 42, .07); transform: translateY(-1px); }
     .sector-card.active { border-color: var(--red); box-shadow: 0 0 0 3px rgba(215, 25, 32, .08); }
@@ -450,10 +492,10 @@
       outline: none;
     }
     .mark-select:hover { border-color: var(--red); color: var(--red); }
-    .flow-strip { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
-    .flow-pill { padding: 9px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft); }
+    .flow-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); gap: 8px; min-width: 0; max-width: 100%; }
+    .flow-pill { min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft); }
     .flow-pill span { display: block; color: var(--muted); font-size: 11px; }
-    .flow-pill b { display: block; margin-top: 4px; font-family: Menlo, Consolas, monospace; }
+    .flow-pill b { display: block; margin-top: 4px; font-family: Menlo, Consolas, monospace; overflow-wrap: anywhere; }
     .pipeline { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
     .pipeline-step { padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--soft); text-align: center; font-size: 13px; font-weight: 900; }
     .strategy-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
@@ -640,6 +682,79 @@
       border-top: 1px solid var(--line);
       background: #fffafa;
     }
+    .calendar-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 175;
+      display: none;
+      place-items: center;
+      padding: 18px;
+      background: rgba(23, 27, 36, .24);
+      backdrop-filter: blur(5px);
+    }
+    .calendar-modal.open { display: grid; }
+    .calendar-card {
+      width: min(520px, calc(100vw - 28px));
+      background: linear-gradient(145deg, #fff, #f3fbf8);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .calendar-head {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 18px 20px;
+      border-bottom: 1px solid rgba(232, 237, 244, .9);
+    }
+    .calendar-title { font-size: 20px; font-weight: 900; }
+    .calendar-nav { display: flex; gap: 8px; }
+    .calendar-nav button {
+      width: 34px;
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(255,255,255,.74);
+      cursor: pointer;
+      font-weight: 900;
+    }
+    .calendar-week,
+    .calendar-grid {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 4px;
+      padding: 0 16px;
+    }
+    .calendar-week { padding-top: 14px; color: var(--muted); font-weight: 900; text-align: center; }
+    .calendar-grid { padding-bottom: 16px; }
+    .calendar-day {
+      min-height: 56px;
+      border: 0;
+      border-radius: 50%;
+      background: transparent;
+      cursor: pointer;
+      color: var(--text);
+      display: grid;
+      place-items: center;
+      line-height: 1.05;
+    }
+    .calendar-day b { display: block; font-size: 18px; }
+    .calendar-day small { display: block; margin-top: 3px; font-size: 11px; color: var(--muted); }
+    .calendar-day:hover { background: rgba(215, 25, 32, .08); }
+    .calendar-day.closed { cursor: not-allowed; color: #a0a8b6; opacity: .48; }
+    .calendar-day.closed:hover { background: transparent; }
+    .calendar-day.selected { background: #4b6270; color: #fff; }
+    .calendar-day.selected small { color: rgba(255,255,255,.78); }
+    .calendar-day.out-month { opacity: .34; }
+    .calendar-foot {
+      padding: 12px 18px 16px;
+      border-top: 1px solid rgba(232, 237, 244, .9);
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.6;
+    }
     .ai-chat-launch {
       position: fixed; right: 18px; bottom: 78px; z-index: 95;
       width: 46px; height: 46px; border-radius: 50%; border: 1px solid rgba(215,25,32,.25);
@@ -660,44 +775,487 @@
     .ai-chat-input { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); background: #fff; }
     .ai-chat-input textarea { flex: 1; min-height: 42px; max-height: 96px; resize: vertical; border: 1px solid var(--line); border-radius: 10px; padding: 9px; font: inherit; }
 
+    /* Premium red trading theme */
+    :root {
+      --red: #d71920;
+      --red-deep: #8f0f16;
+      --red-soft: #fff1f2;
+      --red-2: #fff3f4;
+      --gold: #c88a21;
+      --ink: #111827;
+      --bg: #f7f2f2;
+      --card: rgba(255, 255, 255, .88);
+      --line: rgba(126, 31, 39, .12);
+      --text: #171217;
+      --muted: #766b73;
+      --soft: rgba(255, 248, 248, .76);
+      --shadow: 0 18px 48px rgba(98, 12, 19, .10), 0 2px 8px rgba(17, 24, 39, .04);
+      --cursor-x: 50vw;
+      --cursor-y: 18vh;
+    }
+    html { background: #f7f2f2; }
+    body {
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at var(--cursor-x) var(--cursor-y), rgba(215, 25, 32, .14), transparent 25rem),
+        radial-gradient(circle at 8% 4%, rgba(255, 214, 219, .78), transparent 24rem),
+        linear-gradient(135deg, #fffafa 0%, #f7f2f2 42%, #f9fbff 100%);
+      overflow-x: hidden;
+    }
+    body:before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: -3;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(126, 31, 39, .045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(126, 31, 39, .045) 1px, transparent 1px);
+      background-size: 42px 42px;
+      mask-image: linear-gradient(to bottom, rgba(0,0,0,.58), rgba(0,0,0,.12));
+    }
+    .ambient-glow,
+    .cursor-aura {
+      position: fixed;
+      pointer-events: none;
+      z-index: -2;
+    }
+    .ambient-glow {
+      inset: auto -12vw -22vh auto;
+      width: 48vw;
+      height: 48vw;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(215, 25, 32, .16), rgba(255, 196, 0, .07) 36%, transparent 68%);
+      filter: blur(8px);
+    }
+    .cursor-aura {
+      left: var(--cursor-x);
+      top: var(--cursor-y);
+      width: 260px;
+      height: 260px;
+      border-radius: 50%;
+      transform: translate(-50%, -50%);
+      background: radial-gradient(circle, rgba(215, 25, 32, .16), rgba(215, 25, 32, .07) 36%, transparent 68%);
+      mix-blend-mode: multiply;
+      transition: opacity .2s ease;
+    }
+    .shell {
+      grid-template-columns: 272px minmax(0, 1fr);
+      isolation: isolate;
+    }
+    .sidebar {
+      padding: 18px 14px;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,.92), rgba(255,247,247,.84)),
+        radial-gradient(circle at 20% 0%, rgba(215,25,32,.12), transparent 17rem);
+      border-right: 1px solid rgba(126, 31, 39, .11);
+      box-shadow: 12px 0 40px rgba(98, 12, 19, .06);
+      backdrop-filter: blur(18px);
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      scrollbar-gutter: stable;
+    }
+    .sidebar::-webkit-scrollbar,
+    .sector-scroll::-webkit-scrollbar,
+    .sector-detail-scroll::-webkit-scrollbar {
+      width: 8px;
+      height: 8px;
+    }
+    .sidebar::-webkit-scrollbar-thumb,
+    .sector-scroll::-webkit-scrollbar-thumb,
+    .sector-detail-scroll::-webkit-scrollbar-thumb {
+      border-radius: 999px;
+      background: rgba(215, 25, 32, .24);
+    }
+    .sidebar::-webkit-scrollbar-track,
+    .sector-scroll::-webkit-scrollbar-track,
+    .sector-detail-scroll::-webkit-scrollbar-track {
+      background: rgba(255, 241, 242, .44);
+    }
+    .brand {
+      margin-bottom: 10px;
+      padding: 10px 9px 18px;
+      border-bottom: 1px solid rgba(126, 31, 39, .10);
+    }
+    .brand-mark {
+      width: 48px;
+      height: 48px;
+      border-radius: 14px;
+      background: linear-gradient(135deg, #fff, #fff1f2);
+      box-shadow: 0 16px 32px rgba(215, 25, 32, .18);
+    }
+    .brand-mark img { width: 38px; height: 38px; }
+    .brand-title { font-size: 18px; letter-spacing: 0; }
+    .brand-sub { color: #9b6970; }
+    .nav { gap: 7px; }
+    .nav-parent,
+    .nav button,
+    .nav-child {
+      position: relative;
+      overflow: hidden;
+      border-radius: 12px;
+      transition: transform .18s ease, background .18s ease, color .18s ease, box-shadow .18s ease, border-color .18s ease;
+    }
+    .nav-parent {
+      height: 46px;
+      background: rgba(255,255,255,.58);
+      border: 1px solid rgba(126, 31, 39, .08);
+    }
+    .nav-parent:hover,
+    .nav-child:hover,
+    .nav button:hover {
+      transform: translateX(2px);
+      background: rgba(255, 241, 242, .78);
+      color: var(--red);
+    }
+    .nav-parent.active,
+    .nav-child.active,
+    .nav button.active {
+      background: linear-gradient(135deg, #d71920, #a91018);
+      border-color: rgba(215, 25, 32, .34);
+      color: #fff;
+      box-shadow: 0 14px 28px rgba(215, 25, 32, .20);
+    }
+    .nav-parent.active small,
+    .nav-child.active small,
+    .nav button.active small { color: rgba(255,255,255,.72); }
+    .nav-children { border-left-color: rgba(215, 25, 32, .16); }
+    .main {
+      max-width: 1760px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 24px clamp(16px, 2vw, 30px) 34px;
+    }
+    .topbar {
+      margin: -24px calc(clamp(16px, 2vw, 30px) * -1) 20px;
+      padding: 14px clamp(16px, 2vw, 30px);
+      background: rgba(255, 250, 250, .76);
+      border-bottom: 1px solid rgba(126, 31, 39, .11);
+      box-shadow: 0 14px 34px rgba(98, 12, 19, .06);
+    }
+    .search,
+    .field input,
+    .field select,
+    .mark-select,
+    .ai-chat-input textarea {
+      background: rgba(255,255,255,.86);
+      border-color: rgba(126, 31, 39, .13);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.9);
+      transition: border-color .18s ease, box-shadow .18s ease, background .18s ease;
+    }
+    .search:focus-within,
+    .field input:focus,
+    .field select:focus,
+    .ai-chat-input textarea:focus {
+      border-color: rgba(215, 25, 32, .46);
+      box-shadow: 0 0 0 4px rgba(215,25,32,.08), inset 0 1px 0 rgba(255,255,255,.95);
+      background: #fff;
+    }
+    .btn {
+      border-color: rgba(126, 31, 39, .14);
+      border-radius: 12px;
+      background: rgba(255,255,255,.84);
+      box-shadow: 0 8px 18px rgba(98, 12, 19, .05);
+      transition: transform .18s ease, box-shadow .18s ease, border-color .18s ease, background .18s ease;
+    }
+    .btn:hover {
+      transform: translateY(-1px);
+      border-color: rgba(215,25,32,.26);
+      box-shadow: 0 14px 26px rgba(98, 12, 19, .10);
+    }
+    .btn.primary {
+      background: linear-gradient(135deg, #e11d2a, #a70f16);
+      border-color: rgba(215,25,32,.78);
+      box-shadow: 0 14px 28px rgba(215, 25, 32, .22);
+    }
+    .btn.danger { background: linear-gradient(135deg, #fff5f5, #ffe7e8); }
+    .btn.blue { background: linear-gradient(135deg, #eef4ff, #fff); }
+    .status,
+    .tab-btn,
+    .badge,
+    .chip { box-shadow: 0 8px 18px rgba(98, 12, 19, .05); }
+    .head {
+      margin-bottom: 18px;
+      padding: 0 2px;
+    }
+    .head h2 {
+      font-size: clamp(22px, 2vw, 30px);
+      line-height: 1.2;
+    }
+    .grid { gap: 16px; }
+    .card,
+    .agent-card,
+    .strategy-card,
+    .quote-main,
+    .quote-cell,
+    .report-block,
+    .chart-box,
+    .model-row,
+    .placeholder,
+    .score-cell,
+    .flow-pill,
+    .pipeline-step,
+    .flow-box,
+    .timeline-item {
+      position: relative;
+      border-color: rgba(126, 31, 39, .12);
+      background: linear-gradient(180deg, rgba(255,255,255,.92), rgba(255,255,255,.76));
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(14px);
+    }
+    .card.interactive-card,
+    .agent-card,
+    .strategy-card,
+    .sector-card,
+    .placeholder,
+    .chart-box {
+      transform-style: preserve-3d;
+      transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease;
+    }
+    .card.interactive-card:hover,
+    .agent-card:hover,
+    .strategy-card:hover,
+    .sector-card:hover,
+    .placeholder:hover,
+    .chart-box:hover {
+      border-color: rgba(215, 25, 32, .28);
+      box-shadow: 0 22px 54px rgba(98, 12, 19, .14), 0 2px 8px rgba(17, 24, 39, .04);
+    }
+    .card.interactive-card:before,
+    .agent-card:before,
+    .strategy-card:before,
+    .sector-card:before,
+    .chart-box:before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      pointer-events: none;
+      background: radial-gradient(circle at var(--card-x, 50%) var(--card-y, 0%), rgba(255,255,255,.82), transparent 34%);
+      opacity: 0;
+      transition: opacity .18s ease;
+    }
+    .card.interactive-card:hover:before,
+    .agent-card:hover:before,
+    .strategy-card:hover:before,
+    .sector-card:hover:before,
+    .chart-box:hover:before { opacity: 1; }
+    .metric {
+      overflow: hidden;
+      min-height: 126px;
+    }
+    .metric:after {
+      content: "";
+      position: absolute;
+      right: -28px;
+      top: -36px;
+      width: 112px;
+      height: 112px;
+      border-radius: 50%;
+      background: radial-gradient(circle, rgba(215,25,32,.12), transparent 66%);
+    }
+    .metric-label { font-weight: 800; color: #8a6d73; }
+    .metric-value { font-size: clamp(24px, 2.2vw, 34px); letter-spacing: 0; }
+    .metric-foot { color: #a28c92; }
+    .panel-title {
+      background: linear-gradient(180deg, rgba(255,247,247,.92), rgba(255,255,255,.72));
+      border-bottom-color: rgba(126, 31, 39, .10);
+    }
+    .hero {
+      position: relative;
+      min-height: 210px;
+      display: grid;
+      align-content: center;
+      overflow: hidden;
+      border: 1px solid rgba(255, 255, 255, .32);
+      background:
+        radial-gradient(circle at var(--card-x, 18%) var(--card-y, 20%), rgba(255,255,255,.30), transparent 16rem),
+        linear-gradient(135deg, #d71920 0%, #9f1218 52%, #5b0c12 100%);
+      box-shadow: 0 26px 68px rgba(136, 14, 24, .24);
+    }
+    .hero:before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background:
+        linear-gradient(115deg, rgba(255,255,255,.18), transparent 34%),
+        repeating-linear-gradient(90deg, rgba(255,255,255,.07) 0 1px, transparent 1px 36px);
+      pointer-events: none;
+    }
+    .hero > * { position: relative; z-index: 1; }
+    .hero h1 { font-size: clamp(28px, 3vw, 46px); line-height: 1.15; letter-spacing: 0; }
+    .hero p { max-width: 880px; font-size: 15px; color: rgba(255,255,255,.88); }
+    .chip {
+      background: rgba(255,255,255,.16);
+      border-color: rgba(255,255,255,.30);
+      backdrop-filter: blur(8px);
+    }
+    .table-wrap {
+      border: 1px solid rgba(126, 31, 39, .11);
+      box-shadow: var(--shadow);
+    }
+    table { background: rgba(255,255,255,.86); }
+    th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      background: rgba(255, 247, 247, .96);
+      color: #8a6d73;
+    }
+    tr { transition: background .16s ease; }
+    tr:hover td { background: rgba(255, 242, 243, .68); }
+    .badge { border-radius: 999px; }
+    .badge.red { background: #fff0f1; color: #c71621; }
+    .badge.green { background: #effaf3; }
+    .badge.orange { background: #fff7e8; }
+    .suggestions,
+    .inline-suggestions,
+    .modal-card,
+    .result-card,
+    .ai-chat-card {
+      border-color: rgba(126, 31, 39, .12);
+      background: rgba(255,255,255,.92);
+      box-shadow: 0 26px 78px rgba(98, 12, 19, .18);
+      backdrop-filter: blur(18px);
+    }
+    .modal,
+    .result-modal { background: rgba(45, 17, 22, .28); backdrop-filter: blur(5px); }
+    .modal-head,
+    .ai-chat-head {
+      background: linear-gradient(180deg, rgba(255,247,247,.96), rgba(255,255,255,.86));
+    }
+    .ai-chat-launch {
+      width: 54px;
+      height: 54px;
+      background: linear-gradient(135deg, #ef2330, #9f1218);
+      box-shadow: 0 18px 40px rgba(215,25,32,.28);
+      transition: transform .18s ease, box-shadow .18s ease;
+    }
+    .ai-chat-launch:hover {
+      transform: translateY(-2px) scale(1.03);
+      box-shadow: 0 24px 52px rgba(215,25,32,.34);
+    }
+    canvas.chart {
+      border-color: rgba(126, 31, 39, .10);
+      background: linear-gradient(180deg, rgba(255,255,255,.94), rgba(255,250,250,.90));
+    }
+    .toolbar,
+    .action-strip {
+      background: rgba(255, 248, 248, .70);
+      border-color: rgba(126, 31, 39, .10);
+    }
+    ::selection { background: rgba(215,25,32,.18); }
+
+    @media (max-width: 1280px) {
+      .shell { grid-template-columns: 232px minmax(0, 1fr); }
+      .main { padding-left: 18px; padding-right: 18px; }
+      .topbar { margin-left: -18px; margin-right: -18px; padding-left: 18px; padding-right: 18px; }
+      .sector-layout { grid-template-columns: minmax(320px, .92fr) minmax(0, 1.08fr); }
+      .sector-scroll, .sector-detail-scroll { max-height: calc(100vh - 250px); }
+    }
+    @media (min-width: 1680px) {
+      .sector-layout { grid-template-columns: minmax(520px, .98fr) minmax(0, 1.02fr); }
+      .sector-scroll, .sector-detail-scroll { max-height: calc(100vh - 260px); overflow-y: auto; overflow-x: hidden; padding-right: 4px; }
+    }
     @media (max-width: 1080px) {
-      .shell { grid-template-columns: 1fr; }
-      .sidebar { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+      .shell { grid-template-columns: 204px minmax(0, 1fr); }
+      .sidebar { position: sticky; top: 0; height: 100vh; border-right: 1px solid var(--line); border-bottom: 0; padding: 12px 10px; }
       .brand { padding-bottom: 12px; }
-      .nav { grid-template-columns: repeat(3, minmax(180px, 1fr)); overflow-x: auto; align-items: start; }
-      .nav-parent, .nav button { justify-content: center; }
-      .nav-children { margin-left: 0; padding-left: 0; border-left: 0; }
-      .nav small { display: none; }
+      .brand-title { font-size: 16px; }
+      .brand-sub { font-size: 11px; }
+      .nav { grid-template-columns: 1fr; overflow: visible; align-items: start; padding-bottom: 2px; }
+      .nav-parent, .nav button { justify-content: space-between; }
+      .nav-children { margin-left: 10px; padding-left: 6px; border-left: 2px solid rgba(215,25,32,.12); }
+      .nav small { display: inline; }
       .cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .cols-3, .placeholder-grid, .strategy-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .score-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .sector-layout { grid-template-columns: 1fr; }
+      .sector-layout { grid-template-columns: minmax(280px, .86fr) minmax(0, 1.14fr); }
       .news-layout { grid-template-columns: 1fr; }
-      .sector-scroll, .sector-detail-scroll, .news-scroll { max-height: none; }
+      .sector-scroll, .sector-detail-scroll { max-height: calc(100vh - 238px); }
+      .news-scroll { max-height: none; }
       .pipeline { grid-template-columns: repeat(3, minmax(0, 1fr)); }
       .quote { grid-template-columns: 1fr; }
     }
+    @media (min-width: 681px) and (max-width: 1180px) {
+      .sector-detail-scroll > .grid,
+      .sector-detail-scroll .cols-3 {
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      }
+      .sector-detail-scroll table {
+        min-width: 520px;
+      }
+      .sector-row {
+        grid-template-columns: minmax(0, 1fr) minmax(88px, auto);
+      }
+    }
+    @media (max-width: 900px) {
+      .shell { grid-template-columns: 1fr; }
+      .sidebar { position: sticky; top: 0; z-index: 45; height: auto; max-height: 34vh; border-right: 0; border-bottom: 1px solid var(--line); padding: 12px; }
+      .nav { grid-template-columns: repeat(2, minmax(160px, 1fr)); overflow-y: auto; max-height: 23vh; }
+      .nav-parent, .nav button { justify-content: center; }
+      .nav-children { margin-left: 0; padding-left: 0; border-left: 0; }
+      .nav small { display: none; }
+      .sector-layout { grid-template-columns: minmax(0, 1fr); }
+      .sector-scroll, .sector-detail-scroll { max-height: none; overflow: visible; padding-right: 0; }
+    }
     @media (max-width: 680px) {
-      .main { padding: 14px; }
-      .topbar { margin: -14px -14px 14px; padding: 10px 14px; grid-template-columns: 1fr; }
+      body { background-attachment: fixed; }
+      .cursor-aura { display: none; }
+      .main { padding: 14px 12px 24px; }
+      .topbar { margin: -14px -12px 14px; padding: 10px 12px; grid-template-columns: 1fr; }
+      .sidebar { padding: 12px; }
+      .brand { padding: 6px 4px 12px; }
+      .brand-mark { width: 42px; height: 42px; }
+      .brand-mark img { width: 34px; height: 34px; }
+      .nav { grid-template-columns: repeat(2, minmax(142px, 1fr)); gap: 6px; }
+      .nav-parent { height: 42px; padding: 0 10px; }
+      .nav-child { height: 36px; padding: 0 10px; }
       .actions { justify-content: stretch; }
       .actions .btn, .actions .status { flex: 1; justify-content: center; }
       .cols-4, .cols-3, .cols-2, .placeholder-grid, .strategy-grid { grid-template-columns: 1fr; }
-      .flow-strip { grid-template-columns: 1fr; }
+      .flow-strip { grid-template-columns: repeat(auto-fit, minmax(118px, 1fr)); }
       .pipeline { grid-template-columns: 1fr; }
       .head { align-items: flex-start; flex-direction: column; }
       .modal { padding: 0; }
       .modal-card { margin: 0; min-height: 100vh; border-radius: 0; }
       .quote-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       canvas.chart { height: 220px; }
+      .hero { min-height: 190px; padding: 18px; }
+      .hero h1 { font-size: 28px; }
+      .metric { min-height: 112px; }
+      .table-wrap { border-radius: 12px; }
+      .ai-chat { right: 10px; bottom: 118px; width: calc(100vw - 20px); min-width: 0; max-height: 70vh; resize: none; }
+      .ai-chat-launch { right: 12px; bottom: 58px; }
+      .field, .field.wide { width: 100%; min-width: 0; }
+    }
+    @media (max-width: 420px) {
+      .nav { grid-template-columns: 1fr; max-height: 42vh; overflow-y: auto; }
+      .actions .btn, .actions .status { min-width: 130px; }
+      .quote-grid { grid-template-columns: 1fr; }
+      .score-grid { grid-template-columns: 1fr; }
+    }
+    @media (hover: none), (prefers-reduced-motion: reduce) {
+      .card.interactive-card,
+      .agent-card,
+      .strategy-card,
+      .sector-card,
+      .placeholder,
+      .chart-box,
+      .btn,
+      .nav-parent,
+      .nav-child { transition: none; transform: none !important; }
+      .cursor-aura { display: none; }
     }
   </style>
 </head>
 <body>
+  <div class="ambient-glow" aria-hidden="true"></div>
+  <div class="cursor-aura" aria-hidden="true"></div>
   <div class="shell">
     <aside class="sidebar">
       <div class="brand">
-        <div class="brand-mark">QH</div>
+        <div class="brand-mark"><img src="/static/assets/qh-icon.svg" alt="量化智能猎人"></div>
         <div>
           <span class="brand-title">量化智能猎人</span>
           <span class="brand-sub">高质量信号 · 低频执行</span>
@@ -775,6 +1333,21 @@
       <div class="result-foot"><button class="btn primary" onclick="closeResultModal()">确定</button></div>
     </div>
   </div>
+  <div class="calendar-modal" id="trusteeCalendarModal">
+    <div class="calendar-card">
+      <div class="calendar-head">
+        <div class="calendar-title" id="trusteeCalendarTitle">选择托管日期</div>
+        <div class="calendar-nav">
+          <button onclick="moveTrusteeCalendar(-1)">‹</button>
+          <button onclick="moveTrusteeCalendar(1)">›</button>
+          <button onclick="closeTrusteeCalendar()">×</button>
+        </div>
+      </div>
+      <div class="calendar-week"><span>一</span><span>二</span><span>三</span><span>四</span><span>五</span><span>六</span><span>日</span></div>
+      <div class="calendar-grid" id="trusteeCalendarGrid"></div>
+      <div class="calendar-foot" id="trusteeCalendarFoot">灰色为周末或A股休市日，不可作为最终封盘日。</div>
+    </div>
+  </div>
   <div class="toast" id="toast"></div>
 
   <script>
@@ -819,6 +1392,8 @@
       signals: { buy_signals: [], sell_signals: [], total: 0 },
       aiRecommendations: { recommendations: [], summary: {}, ai_meta: {} },
       aiChat: { messages: [] },
+      aiTrustee: { simulation: {}, live: {}, pending_count: 0, fill_count: 0, fees: {}, portfolio: {}, positions: [] },
+      aiTrusteeRecords: { events: [], orders: [], fills: [], daily_reviews: [] },
       portfolio: {},
       positions: [],
       orders: [],
@@ -853,11 +1428,17 @@
       agents: { agents: [], pipeline: [], logs: [] },
       strategy: 'short',
       aiPickScope: localStorage.getItem('quant_ai_pick_scope') || 'focus',
+      aiPickJob: null,
       openNavGroups: ['market_group'],
       pointer: { x: window.innerWidth - 220, y: window.innerHeight - 120 },
       aiChatLayout: null,
       aiChatDragging: null,
+      trusteeCalendar: { target: '', year: new Date().getFullYear(), month: new Date().getMonth() + 1, selected: '', data: null },
       screeningJob: null,
+      loadedSections: {},
+      backgroundTimers: [],
+      refreshRunning: false,
+      refreshQueued: false,
       lastUpdate: '--'
     };
 
@@ -920,23 +1501,23 @@
     }
     function price(v) {
       const n = num(v);
-      return n ? n.toFixed(2) : '--';
+      return Number.isFinite(n) && n !== 0 ? n.toFixed(2) : '--';
     }
     function pct(v) {
       if (v === null || v === undefined || v === '') return '--';
       const n = num(v);
-      return `${n > 0 ? '+' : ''}${n.toFixed(2)}%`;
+      return Number.isFinite(n) && n !== 0 ? `${n > 0 ? '+' : ''}${n.toFixed(2)}%` : '--';
     }
     function amount(v) {
       const n = num(v);
-      if (!n) return '--';
+      if (!Number.isFinite(n) || n === 0) return '--';
       if (Math.abs(n) >= 1e8) return `${(n / 1e8).toFixed(2)}亿`;
       if (Math.abs(n) >= 1e4) return `${(n / 1e4).toFixed(0)}万`;
       return n.toFixed(0);
     }
     function volumeText(v) {
       const n = num(v);
-      if (!n) return '--';
+      if (!Number.isFinite(n) || n === 0) return '--';
       if (Math.abs(n) >= 1e8) return `${(n / 1e8).toFixed(2)}亿手`;
       if (Math.abs(n) >= 1e4) return `${(n / 1e4).toFixed(2)}万手`;
       return `${n.toFixed(0)}手`;
@@ -951,7 +1532,6 @@
         eastmoney_kline: '东方财富K线',
         real_l1: '实时五档',
         partial_l1: '部分盘口',
-        estimated: '估算数据',
         unavailable: emptyText,
       })[source] || emptyText;
     }
@@ -1146,6 +1726,24 @@
         }
       };
     }
+    function applyNewsPayload(payload = {}, preserveOnEmpty = false) {
+      const incoming = Array.isArray(payload.news) ? payload.news : [];
+      const hadNews = Array.isArray(state.news) && state.news.length > 0;
+      const shouldPreserve = payload.preserve_cache || (preserveOnEmpty && hadNews && incoming.length === 0);
+      if (!shouldPreserve) {
+        state.news = incoming;
+      }
+      state.sentiment = payload.sentiment || (shouldPreserve ? (state.sentiment || {}) : {});
+      state.newsMeta = payload.source_meta || state.sentiment.source_meta || (shouldPreserve ? (state.newsMeta || {}) : {});
+      if (shouldPreserve && payload.error) {
+        state.newsMeta = {
+          ...(state.newsMeta || {}),
+          refresh_error: payload.error,
+          cache_preserved: true,
+          preserved_at: new Date().toLocaleTimeString()
+        };
+      }
+    }
     function clampAIChatLayout(layout) {
       const panel = document.getElementById('aiChat');
       const width = Math.min(Math.max(num(layout.width, panel?.offsetWidth || 420), 320), Math.max(320, window.innerWidth - 16));
@@ -1311,6 +1909,7 @@
       state.openNavGroups = group && !group.direct ? [group.id] : [];
       initNav();
       render();
+      ensureSectionData(id);
       if (id === 'tradeReview' && !(state.tradeReview.rows || []).length) loadTradeReviews({ offset: 0 });
     }
 
@@ -1416,10 +2015,151 @@
       toast('已从AI列表移除');
     }
 
+    function isCNTradingSession(date = new Date()) {
+      const day = date.getDay();
+      if (day === 0 || day === 6) return false;
+      const minutes = date.getHours() * 60 + date.getMinutes();
+      return (minutes >= 9 * 60 && minutes <= 11 * 60 + 30) || (minutes >= 13 * 60 && minutes <= 15 * 60);
+    }
+    function updateServiceBadge(health = { status: 'ok' }) {
+      document.getElementById('serviceText').textContent = health.status === 'ok' ? '服务正常' : '服务异常';
+      document.getElementById('serviceDot').classList.toggle('halt', !!state.kill.active || health.status !== 'ok');
+      const killBtn = document.getElementById('killBtn');
+      if (killBtn) {
+        killBtn.textContent = state.kill.active ? '解除熔断' : '熔断';
+        killBtn.className = state.kill.active ? 'btn green' : 'btn danger';
+      }
+    }
+    async function refreshShell({ renderAfter = true } = {}) {
+      const [health, system, kill, cacheStatus, news] = await Promise.all([
+        api('/api/v1/health', { timeout: 5000 }).catch(() => ({ status: 'error' })),
+        api('/api/v1/quant/system/status', { timeout: 6000 }).catch(() => state.system || {}),
+        api('/api/v1/quant/kill-switch/status', { timeout: 6000 }).catch(() => state.kill || { active: false }),
+        api('/api/v1/market/cache/status', { timeout: 7000, noCache: true }).catch(() => state.marketCache || {}),
+        api('/api/v1/quant/news?limit=80', { timeout: 10000 }).catch(e => ({ error: e.message, news: state.news || [], sentiment: state.sentiment || {}, source_meta: state.newsMeta || {}, preserve_cache: true }))
+      ]);
+      state.system = system || {};
+      state.kill = kill || { active: false };
+      state.marketCache = cacheStatus || {};
+      applyNewsPayload(news, true);
+      state.lastUpdate = new Date().toLocaleTimeString();
+      updateServiceBadge(health);
+      if (renderAfter) render();
+    }
+    async function refreshDashboardData({ renderAfter = true } = {}) {
+      const [portfolio, positions, risk, aiTrustee] = await Promise.all([
+        api('/api/v1/quant/portfolio', { timeout: 7000 }).catch(() => state.portfolio || {}),
+        api('/api/v1/quant/portfolio/positions', { timeout: 7000 }).catch(() => ({ positions: state.positions || [] })),
+        api('/api/v1/quant/risk', { timeout: 7000 }).catch(() => state.risk || {}),
+        api('/api/v1/quant/ai-trustee/status', { timeout: 7000, noCache: true }).catch(() => state.aiTrustee || {})
+      ]);
+      state.portfolio = portfolio || {};
+      state.positions = positions.positions || [];
+      state.risk = risk || {};
+      state.aiTrustee = aiTrustee || state.aiTrustee || {};
+      state.loadedSections.dashboard = true;
+      if (renderAfter && state.active === 'dashboard') renderDashboard();
+    }
+    async function refreshMarketData({ renderAfter = true } = {}) {
+      const stocks = await api('/api/v1/stocks?limit=300&offset=0', { timeout: 14000 }).catch(() => ({ stocks: state.stocks || [] }));
+      state.stocks = stocks.stocks || [];
+      state.loadedSections.market = true;
+      if (renderAfter && state.active === 'market') renderMarket();
+    }
+    async function refreshPortfolioData({ renderAfter = true } = {}) {
+      const [portfolio, positions, orders, stats, aiTrustee] = await Promise.all([
+        api('/api/v1/quant/portfolio', { timeout: 8000 }).catch(() => state.portfolio || {}),
+        api('/api/v1/quant/portfolio/positions', { timeout: 8000 }).catch(() => ({ positions: state.positions || [] })),
+        api('/api/v1/quant/portfolio/orders?limit=40', { timeout: 8000 }).catch(() => ({ orders: state.orders || [] })),
+        api('/api/v1/quant/portfolio/statistics', { timeout: 8000 }).catch(() => state.stats || {}),
+        api('/api/v1/quant/ai-trustee/status', { timeout: 8000, noCache: true }).catch(() => state.aiTrustee || {})
+      ]);
+      state.portfolio = portfolio || {};
+      state.positions = positions.positions || [];
+      state.orders = orders.orders || [];
+      state.stats = stats || {};
+      state.aiTrustee = aiTrustee || state.aiTrustee || {};
+      state.loadedSections.portfolio = true;
+      if (renderAfter && state.active === 'portfolio') renderPortfolio();
+    }
+    async function refreshRiskData({ renderAfter = true } = {}) {
+      const [risk, kill] = await Promise.all([
+        api('/api/v1/quant/risk', { timeout: 8000 }).catch(() => state.risk || {}),
+        api('/api/v1/quant/kill-switch/status', { timeout: 8000 }).catch(() => state.kill || { active: false })
+      ]);
+      state.risk = risk || {};
+      state.kill = kill || { active: false };
+      state.loadedSections.risk = true;
+      updateServiceBadge({ status: 'ok' });
+      if (renderAfter && state.active === 'risk') renderRisk();
+    }
+    async function refreshSignalsData({ renderAfter = true, showToast = false } = {}) {
+      state.signals = await api('/api/v1/quant/signals', { timeout: 12000 }).catch(() => ({ buy_signals: [], sell_signals: [], total: 0 }));
+      state.aiRecommendations = state.signals.ai_recommendations || state.aiRecommendations || { recommendations: [], summary: {}, ai_meta: {} };
+      state.aiPickJob = await api('/api/v1/quant/signals/ai-pick/latest', { timeout: 12000, noCache: true }).catch(() => state.aiPickJob || null);
+      state.loadedSections.signals = true;
+      if (renderAfter && state.active === 'signals') renderSignals();
+      if (showToast) toast('信号已刷新');
+    }
+    async function refreshAgentsData({ renderAfter = true } = {}) {
+      state.agents = await api('/api/v1/quant/agents', { timeout: 9000 }).catch(() => ({ agents: [], pipeline: [], logs: [] }));
+      state.loadedSections.agents = true;
+      if (renderAfter && state.active === 'agents') renderAgents();
+    }
+    async function refreshAIData({ renderAfter = true, showToast = false } = {}) {
+      const res = await api('/api/v1/ai/providers', { timeout: 9000 }).catch(() => ({ providers: [], config: {} }));
+      state.ai.providers = res.providers || [];
+      state.ai.config = res.config || {};
+      state.loadedSections.ai = true;
+      if (renderAfter && state.active === 'ai' && !isAIFormEditing()) renderAI();
+      if (showToast) toast('智能模型配置已刷新');
+    }
+    async function refreshDataHubData({ renderAfter = true } = {}) {
+      const [cacheStatus, dataCoverage] = await Promise.all([
+        api('/api/v1/market/cache/status', { timeout: 9000, noCache: true }).catch(() => state.marketCache || {}),
+        api('/api/v1/market/data-hub/coverage', { timeout: 12000, noCache: true }).catch(() => state.dataCoverage || {})
+      ]);
+      state.marketCache = cacheStatus || {};
+      state.dataCoverage = dataCoverage || {};
+      state.loadedSections.datahub = true;
+      if (renderAfter && state.active === 'datahub') renderDataHub();
+    }
+    async function ensureSectionData(id) {
+      if (id === 'dashboard' && !state.loadedSections.dashboard) return refreshDashboardData();
+      if (id === 'market' && !state.loadedSections.market) return refreshMarketData();
+      if (id === 'sectors' && !((state.sectors || {}).sectors || []).length) {
+        state.sectors = await api('/api/v1/sectors', { timeout: 16000 }).catch(() => state.sectors || { sectors: [], summary: {}, flow_history: [] });
+        state.loadedSections.sectors = true;
+        if (state.active === 'sectors') renderSectors({ preserveScroll: true });
+      }
+      if (id === 'screening' && !state.loadedSections.screening) {
+        await loadScreeningCache();
+        state.loadedSections.screening = true;
+        if (state.active === 'screening') renderScreening();
+      }
+      if (id === 'signals' && !state.loadedSections.signals) return refreshSignalsData();
+      if (id === 'portfolio' && !state.loadedSections.portfolio) return refreshPortfolioData();
+      if (id === 'news' && !state.loadedSections.news) {
+        const news = await api('/api/v1/quant/news?limit=500', { timeout: 18000 }).catch(e => ({ error: e.message, news: state.news || [], sentiment: state.sentiment || {}, source_meta: state.newsMeta || {}, preserve_cache: true }));
+        applyNewsPayload(news, true);
+        state.loadedSections.news = true;
+        if (state.active === 'news') renderNews();
+      }
+      if (id === 'risk' && !state.loadedSections.risk) return refreshRiskData();
+      if (id === 'datahub' && !state.loadedSections.datahub) return refreshDataHubData();
+      if (id === 'ai' && !state.loadedSections.ai) return refreshAIData();
+      if (id === 'agents' && !state.loadedSections.agents) return refreshAgentsData();
+    }
+
     async function refreshAll() {
+      if (state.refreshRunning) {
+        state.refreshQueued = true;
+        return;
+      }
+      state.refreshRunning = true;
       try {
         document.getElementById('serviceText').textContent = '同步中';
-        const [health, stocks, sectors, system, portfolio, positions, orders, stats, news, risk, kill, aiProviders, agents, cacheStatus, dataCoverage] = await Promise.all([
+        const [health, stocks, sectors, system, portfolio, positions, orders, stats, news, risk, kill, aiProviders, agents, cacheStatus, dataCoverage, aiTrustee] = await Promise.all([
           api('/api/v1/health').catch(() => ({ status: 'error' })),
           api('/api/v1/stocks?limit=10000&offset=0', { timeout: 28000 }).catch(() => ({ stocks: state.stocks })),
           api('/api/v1/sectors', { timeout: 18000 }).catch(() => state.sectors || { sectors: [], summary: {}, flow_history: [] }),
@@ -1428,13 +2168,14 @@
           api('/api/v1/quant/portfolio/positions').catch(() => ({ positions: [] })),
           api('/api/v1/quant/portfolio/orders?limit=40').catch(() => ({ orders: [] })),
           api('/api/v1/quant/portfolio/statistics').catch(() => ({})),
-          api('/api/v1/quant/news').catch(() => ({ news: [], sentiment: {} })),
+          api('/api/v1/quant/news?limit=500', { timeout: 18000 }).catch(e => ({ error: e.message, news: state.news || [], sentiment: state.sentiment || {}, source_meta: state.newsMeta || {}, preserve_cache: true })),
           api('/api/v1/quant/risk').catch(() => ({})),
           api('/api/v1/quant/kill-switch/status').catch(() => ({ active: false })),
           api('/api/v1/ai/providers').catch(() => ({ providers: [], config: {} })),
           api('/api/v1/quant/agents').catch(() => ({ agents: [], pipeline: [], logs: [] })),
           api('/api/v1/market/cache/status', { noCache: true }).catch(() => state.marketCache || {}),
-          api('/api/v1/market/data-hub/coverage', { noCache: true }).catch(() => state.dataCoverage || {})
+          api('/api/v1/market/data-hub/coverage', { noCache: true }).catch(() => state.dataCoverage || {}),
+          api('/api/v1/quant/ai-trustee/status', { noCache: true }).catch(() => state.aiTrustee || {})
         ]);
         state.stocks = stocks.stocks || [];
         state.sectors = sectors || { sectors: [], summary: {}, flow_history: [] };
@@ -1443,9 +2184,7 @@
         state.positions = positions.positions || [];
         state.orders = orders.orders || [];
         state.stats = stats || {};
-        state.news = news.news || [];
-        state.sentiment = news.sentiment || {};
-        state.newsMeta = news.source_meta || state.sentiment.source_meta || {};
+        applyNewsPayload(news, true);
         state.risk = risk || {};
         state.kill = kill || { active: false };
         state.ai.providers = aiProviders.providers || [];
@@ -1453,6 +2192,7 @@
         state.agents = agents || { agents: [], pipeline: [], logs: [] };
         state.marketCache = cacheStatus || {};
         state.dataCoverage = dataCoverage || {};
+        state.aiTrustee = aiTrustee || state.aiTrustee || {};
         state.lastUpdate = new Date().toLocaleTimeString();
         document.getElementById('serviceText').textContent = health.status === 'ok' ? '服务正常' : '服务异常';
         document.getElementById('serviceDot').classList.toggle('halt', !!state.kill.active || health.status !== 'ok');
@@ -1463,31 +2203,188 @@
         document.getElementById('serviceText').textContent = '连接失败';
         document.getElementById('serviceDot').classList.add('halt');
         toast('后端连接失败，请确认启动H5预览.bat窗口仍在运行');
+      } finally {
+        state.refreshRunning = false;
+        if (state.refreshQueued) {
+          state.refreshQueued = false;
+          setTimeout(refreshAll, 300);
+        }
       }
     }
     async function loadSignals() {
-      state.signals = await api('/api/v1/quant/signals').catch(() => ({ buy_signals: [], sell_signals: [], total: 0 }));
-      state.aiRecommendations = state.signals.ai_recommendations || state.aiRecommendations || { recommendations: [], summary: {}, ai_meta: {} };
-      await refreshAgents(false);
-      if (state.active === 'signals') renderSignals();
-      toast('信号已刷新');
+      await refreshSignalsData({ showToast: true });
+      if (state.loadedSections.agents) await refreshAgents(false);
+    }
+    async function refreshAITrustee({ silent = false } = {}) {
+      state.aiTrustee = await api('/api/v1/quant/ai-trustee/status', { noCache: true }).catch(() => state.aiTrustee || {});
+      if (state.active === 'portfolio') renderPortfolio();
+      if (!silent) toast('AI托管状态已刷新');
+      return state.aiTrustee;
+    }
+    async function startAITrustee(accountType) {
+      const input = document.getElementById(`${accountType}TrusteeEndDate`);
+      const endDate = input && input.value ? input.value : new Date().toISOString().slice(0, 10);
+      const label = accountType === 'live' ? '实操盘' : '模拟盘';
+      const progress = startProgressToast(`正在开启${label}AI托管...`);
+      const res = await api('/api/v1/quant/ai-trustee/start', {
+        method: 'POST',
+        timeout: 60000,
+        body: JSON.stringify({ account_type: accountType === 'live' ? 'live' : 'simulation', end_date: endDate })
+      }).catch(e => ({ success: false, error: e.message }));
+      state.aiTrustee = res || state.aiTrustee;
+      renderPortfolio();
+      if (!res.success) {
+        progress.fail(res.error || `${label}AI托管开启失败`);
+        showResultModal(`${label}AI托管未开启`, [res.error || '请求失败', '当前版本只允许模拟盘执行，实操盘不会自动下单。'], true);
+        return;
+      }
+      progress.done(`${label}AI托管已开启`);
+      showResultModal(`${label}AI托管已开启`, [
+        `托管至 ${endDate} 封盘`,
+        `AI可调动20万模拟资金，但会遵守T+1、100股整数倍、涨跌停排队和板块权限。`,
+        `费用：佣金万三，卖出印花税万五，过户费十万分之一。`
+      ]);
+    }
+    async function stopAITrustee(accountType) {
+      const res = await api('/api/v1/quant/ai-trustee/stop', {
+        method: 'POST',
+        body: JSON.stringify({ account_type: accountType === 'live' ? 'live' : 'simulation', reason: '用户手动停止AI托管' })
+      }).catch(e => ({ success: false, error: e.message }));
+      state.aiTrustee = res || state.aiTrustee;
+      renderPortfolio();
+      toast(res.success ? 'AI托管已停止' : `停止失败：${res.error || '未知错误'}`);
+    }
+    async function runAITrusteeReview() {
+      const res = await api('/api/v1/quant/ai-trustee/review', { method: 'POST', timeout: 90000, body: JSON.stringify({ force: true }) }).catch(e => ({ success: false, error: e.message }));
+      state.aiTrustee = res || state.aiTrustee;
+      await openAITrusteeRecords();
+      toast(res.success ? 'AI托管复盘已生成' : `复盘失败：${res.error || '未知错误'}`);
+    }
+    async function openAITrusteeRecords() {
+      state.aiTrusteeRecords = await api('/api/v1/quant/ai-trustee/records?limit=500', { noCache: true }).catch(() => state.aiTrusteeRecords || {});
+      const records = state.aiTrusteeRecords || {};
+      const events = records.events || [];
+      const fills = records.fills || [];
+      const orders = records.orders || [];
+      const reviews = records.daily_reviews || [];
+      const selfTest = ((state.aiTrustee || {}).simulation || {}).self_test || ((state.aiTrustee || {}).indicator || {}).self_test || {};
+      const checks = selfTest.checks || [];
+      const body = `
+        <div class="card table-wrap"><div class="panel-title">AI托管自检</div><table><thead><tr><th>检查项</th><th>结果</th><th>详情</th><th>时间</th></tr></thead><tbody>${checks.map(c => `
+          <tr><td>${escapeHtml(c.name)}</td><td><span class="badge ${c.ok ? 'green' : 'red'}">${c.ok ? '通过' : '未通过'}</span></td><td>${escapeHtml(c.detail)}</td><td>${escapeHtml(c.checked_at || '')}</td></tr>
+        `).join('') || `<tr><td colspan="4"><div class="loading">暂无自检记录</div></td></tr>`}</tbody></table></div>
+        <div style="height:12px"></div>
+        <div class="card table-wrap"><div class="panel-title">AI托管事件</div><table><thead><tr><th>时间</th><th>类型</th><th>标题</th><th>详情</th></tr></thead><tbody>${events.map(e => `
+          <tr><td>${escapeHtml(e.created_at)}</td><td>${escapeHtml(e.kind)}</td><td>${escapeHtml(e.title)}</td><td>${escapeHtml(e.detail)}</td></tr>
+        `).join('') || '<tr><td colspan="4"><div class="loading">暂无托管事件</div></td></tr>'}</tbody></table></div>
+        <div style="height:12px"></div>
+        <div class="card table-wrap"><div class="panel-title">挂单与成交</div><table><thead><tr><th>时间</th><th>股票</th><th>方向</th><th class="num">价格</th><th class="num">数量</th><th>状态</th><th>分析</th></tr></thead><tbody>${orders.map(o => {
+          const a = o.analysis || {};
+          return `<tr><td>${escapeHtml(o.created_at)}</td><td>${escapeHtml(o.name || o.code)}<div class="stock-code">${escapeHtml(o.code)}</div></td><td>${o.side === 'buy' ? '买入' : '卖出'}</td><td class="num">${price(o.price)}</td><td class="num">${o.quantity}</td><td>${escapeHtml(o.status)}<div class="stock-code">${escapeHtml(o.market_session_label || '')} ${escapeHtml(o.queue_state || '')}</div>${o.limit_queue || o.queue_ahead_shares ? `<div class="stock-code">排队前方 ${safeText(o.queue_ahead_shares, 0)} 股，推进 ${safeText(o.queue_progress_shares, 0)} 股</div>` : ''}</td><td>${escapeHtml(a.order_reason || a.market_read || o.reason || '')}</td></tr>`;
+        }).join('') || '<tr><td colspan="7"><div class="loading">暂无挂单</div></td></tr>'}</tbody></table></div>
+        <div style="height:12px"></div>
+        <div class="card table-wrap"><div class="panel-title">成交明细</div><table><thead><tr><th>成交时间</th><th>股票</th><th>方向</th><th class="num">金额</th><th class="num">费用</th><th>理由</th></tr></thead><tbody>${fills.map(f => `
+          <tr><td>${escapeHtml(f.filled_at)}</td><td>${escapeHtml(f.name || f.code)}<div class="stock-code">${escapeHtml(f.code)}</div></td><td>${f.side === 'buy' ? '买入' : '卖出'}</td><td class="num">${money(f.amount)}</td><td class="num">${money(f.total_fee)}</td><td>${escapeHtml(f.reason)}</td></tr>
+        `).join('') || '<tr><td colspan="6"><div class="loading">暂无成交</div></td></tr>'}</tbody></table></div>
+        <div style="height:12px"></div>
+        <div class="card pad"><div class="panel-title">三点后复盘</div>${reviews.map(r => `<div class="note" style="margin-bottom:10px">${escapeHtml(r.created_at)}：${escapeHtml((r.ai_review && (r.ai_review.summary || r.ai_review.review)) || r.summary || '已生成复盘')}</div>`).join('') || '<div class="loading">暂无复盘</div>'}</div>
+        <div style="height:12px"></div>
+        <div class="card pad"><div class="panel-title">AI纪律与政策</div><div class="kv">${kv('AI自定纪律', escapeHtml((records.events || []).find(e => (e.title || '').includes('AI托管分析完成'))?.payload?.plan?.ai_policy ? JSON.stringify((records.events || []).find(e => (e.title || '').includes('AI托管分析完成')).payload.plan.ai_policy) : '暂无'))}</div></div>
+      `;
+      showWideModal('AI托管记录', body);
+    }
+    function showWideModal(title, bodyHtml) {
+      stopRealtimePolling(true);
+      document.getElementById('modalTitle').textContent = title;
+      document.getElementById('modalBody').innerHTML = bodyHtml;
+      document.getElementById('stockModal').classList.add('open');
+    }
+    async function openTrusteeCalendar(targetId) {
+      const raw = document.getElementById(targetId)?.value || new Date().toISOString().slice(0, 10);
+      const d = new Date(`${raw}T00:00:00`);
+      state.trusteeCalendar = {
+        target: targetId,
+        year: d.getFullYear(),
+        month: d.getMonth() + 1,
+        selected: raw,
+        data: null
+      };
+      document.getElementById('trusteeCalendarModal').classList.add('open');
+      await renderTrusteeCalendar();
+    }
+    function closeTrusteeCalendar() {
+      document.getElementById('trusteeCalendarModal').classList.remove('open');
+    }
+    async function moveTrusteeCalendar(delta) {
+      const c = state.trusteeCalendar;
+      let month = c.month + delta;
+      let year = c.year;
+      if (month < 1) { month = 12; year -= 1; }
+      if (month > 12) { month = 1; year += 1; }
+      state.trusteeCalendar = { ...c, year, month, data: null };
+      await renderTrusteeCalendar();
+    }
+    async function renderTrusteeCalendar() {
+      const c = state.trusteeCalendar;
+      const title = document.getElementById('trusteeCalendarTitle');
+      const grid = document.getElementById('trusteeCalendarGrid');
+      const foot = document.getElementById('trusteeCalendarFoot');
+      title.textContent = `${c.year}年${c.month}月`;
+      grid.innerHTML = '<div class="loading" style="grid-column:1/-1">交易日历加载中...</div>';
+      const data = await api(`/api/v1/quant/trading-calendar/month?year=${c.year}&month=${c.month}`, { noCache: true }).catch(() => ({ days: [] }));
+      state.trusteeCalendar.data = data;
+      grid.innerHTML = (data.days || []).map(day => {
+        const cls = [
+          'calendar-day',
+          day.is_trading_day ? '' : 'closed',
+          day.in_month ? '' : 'out-month',
+          day.date === c.selected ? 'selected' : ''
+        ].filter(Boolean).join(' ');
+        const lunar = day.is_trading_day ? '交易' : (day.reason || '休市').replace('休市', '');
+        const click = day.is_trading_day ? `selectTrusteeCalendarDate('${day.date}')` : `toast('${escapeHtml(day.reason || 'A股休市日，不可选择')}')`;
+        return `<button class="${cls}" onclick="${click}" title="${escapeHtml(day.reason || '')}"><span><b>${day.day}</b><small>${escapeHtml(lunar)}</small></span></button>`;
+      }).join('');
+      foot.textContent = '灰色为周末或A股休市日，不可作为最终封盘日。若接口收到非交易日，后端仍会自动提前到截止日前最后一个交易日清仓。';
+    }
+    async function selectTrusteeCalendarDate(value) {
+      const target = state.trusteeCalendar.target;
+      const input = document.getElementById(target);
+      if (input) input.value = value;
+      state.trusteeCalendar.selected = value;
+      const normalized = await api(`/api/v1/quant/trading-calendar/normalize?date=${encodeURIComponent(value)}`, { noCache: true }).catch(() => null);
+      closeTrusteeCalendar();
+      if (normalized && normalized.note) toast(normalized.note);
     }
     function wait(ms) {
       return new Promise(resolve => setTimeout(resolve, ms));
     }
     async function waitAIStockPickingJob(jobId, progress, scope) {
       const maxLoops = scope === 'all' ? 900 : 120;
+      let pollErrors = 0;
       for (let i = 0; i < maxLoops; i += 1) {
         await wait(i < 5 ? 1200 : 2500);
-        const job = await api(`/api/v1/quant/signals/ai-pick/status/${encodeURIComponent(jobId)}`, { timeout: 12000, noCache: true }).catch(e => ({ status: 'poll_error', message: e.message }));
+        let job = await api(`/api/v1/quant/signals/ai-pick/status/${encodeURIComponent(jobId)}`, { timeout: scope === 'all' ? 12000 : 8000, noCache: true }).catch(e => ({ status: 'poll_error', message: e.message }));
+        if (job.status === 'poll_error') {
+          pollErrors += 1;
+          job = await api('/api/v1/quant/signals/ai-pick/latest', { timeout: 12000, noCache: true }).catch(() => ({ status: 'poll_error' }));
+          if (job.status === 'poll_error') {
+            progress.update(`AI选股后台仍在运行，状态同步第${pollErrors}次重试...`);
+            continue;
+          }
+        }
+        pollErrors = 0;
         if (job.status === 'done' || job.status === 'failed') return job.result || { error: job.message || 'AI选股任务没有返回结果' };
         if (job.status === 'not_found') return { error: 'AI选股任务状态丢失，请刷新页面后重试。' };
         const p = job.progress || {};
-        const batchText = p.batch_total ? `（第${p.batch_done || 0}/${p.batch_total}批）` : '';
+        const batchText = p.total_count ? `（${p.completed_count || 0}/${p.total_count}）` : (p.batch_total ? `（${p.batch_done || 0}/${p.batch_total}）` : '');
         const countText = p.eligible_count ? `，候选${p.eligible_count}只` : (p.ai_scored_count ? `，AI已评分${p.ai_scored_count}只` : '');
         progress.update(`${job.message || 'AI选股后台运行中'}${batchText}${countText}`);
       }
-      return { error: 'AI选股后台任务等待超时。任务可能仍在后端运行，请稍后点击“刷新信号”查看结果。' };
+      return {
+        background_running: true,
+        job_id: jobId,
+        message: 'AI选股后台任务仍在运行。页面会停止本次等待，但不会把它记为失败；稍后可点“刷新信号”查看最终结果。'
+      };
     }
     async function runAIStockPicking() {
       const selected = document.getElementById('aiPickStrategy')?.value;
@@ -1504,12 +2401,12 @@
       }
       const scopeText = scope === 'all' ? '所有股票选股' : `关注股票选股（${focusRows.length}只）`;
       const progressText = scope === 'all'
-        ? 'AI正在扫描全市场，通过第二阶段的股票会分批交给AI质量打分，再选20只进复核池...'
+        ? 'AI正在扫描全市场，通过第二阶段的股票会逐只交给AI质量打分，再选20只进复核池...'
         : `AI正在复核${scopeText}，请稍等...`;
       const progress = startProgressToast(progressText);
       const start = await api('/api/v1/quant/signals/ai-pick/start', {
         method: 'POST',
-        timeout: 20000,
+        timeout: scope === 'all' ? 120000 : 60000,
         body: JSON.stringify({
           strategy: state.strategy,
           scope,
@@ -1530,6 +2427,18 @@
       }
       progress.update(`AI选股已进入后台任务：${start.job_id}`);
       const res = await waitAIStockPickingJob(start.job_id, progress, scope);
+      if (res.background_running) {
+        state.aiPickJob = {
+          job_id: start.job_id,
+          status: 'running',
+          message: res.message,
+          scope,
+          updated_at: new Date().toLocaleString()
+        };
+        if (state.active === 'signals') renderSignals();
+        progress.done(res.message);
+        return;
+      }
       if (res.error) {
         state.aiRecommendations = { recommendations: [], reviewed_candidates: [], summary: { market_view: res.error, method: 'AI未完成，本次不生成推荐结果' }, error: res.error, ai_meta: res.ai_meta || {}, generated_at: new Date().toLocaleString() };
         saveAIRecommendations();
@@ -1620,7 +2529,9 @@
           return;
         }
         if (job.status === 'failed' || job.status === 'missing') {
-          toast(job.message || '选股任务失败');
+          state.screeningJob = null;
+          if (state.active === 'screening') renderScreening();
+          toast(job.status === 'missing' ? '选股任务已失效，请重新运行选股' : (job.message || '选股任务失败'));
           return;
         }
         await new Promise(resolve => setTimeout(resolve, 2000));
@@ -1637,17 +2548,29 @@
       const watchlistCodes = (state.watchlist || []).map(s => s.code).filter(Boolean);
       const res = await api('/api/v1/quant/news/refresh', {
         method: 'POST',
+        timeout: 90000,
+        noCache: true,
         body: JSON.stringify({ watchlist_codes: watchlistCodes })
       }).catch(e => ({ error: e.message }));
-      if (res.error) return toast(`新闻刷新失败：${res.error}`);
-      state.news = res.news || [];
-      state.sentiment = res.sentiment || {};
-      state.newsMeta = res.source_meta || state.sentiment.source_meta || {};
+      if (res.error) {
+        state.news = state.news || [];
+        return toast(`新闻刷新未完成，已保留当前缓存：${res.error}`);
+      }
+      const beforeCount = (state.news || []).length;
+      applyNewsPayload(res, true);
       state.sectors = await api('/api/v1/sectors').catch(() => state.sectors);
+      if (state.activeSector) {
+        const detail = await api(`/api/v1/sectors/${encodeURIComponent(state.activeSector)}`, { timeout: 12000, noCache: true }).catch(() => null);
+        if (detail && !detail.error) {
+          state.sectorDetail = detail;
+          state.sectorDetailCache[state.activeSector] = detail;
+        }
+      }
       await refreshAgents(false);
       if (state.active === 'news') renderNews();
       if (state.active === 'sectors') renderSectors({ preserveScroll: true });
-      toast(`新闻刷新完成：${res.count || state.news.length}条`);
+      const keptCache = beforeCount && !(res.news || []).length;
+      toast(`${keptCache ? '新闻源本次返回为空，已保留缓存' : (res.cache_fallback ? '新闻源暂不可用，已使用缓存' : '新闻刷新完成')}：${state.news.length}条`);
     }
     async function refreshSectors(showToast = true) {
       if (showToast) toast('正在刷新板块资金流与新闻归因...');
@@ -1664,15 +2587,59 @@
       if (state.active === 'sectors') renderSectors({ preserveScroll: true });
       if (showToast) toast(`板块刷新完成：${safeText((res.summary || {}).sector_count, 0)}个板块`);
     }
+    function buildSectorFallbackDetail(code, error = '') {
+      const row = ((state.sectors || {}).sectors || []).find(s => s.code === code) || {};
+      return {
+        code,
+        name: row.name || code,
+        sector_type: row.sector_type || '',
+        partial: true,
+        loading: !error,
+        error,
+        summary: {
+          pct_change: row.pct_change,
+          advance_count: row.advance_count,
+          decline_count: row.decline_count,
+          stock_count: row.stock_count || 0,
+          up_count: row.advance_count || 0,
+          down_count: row.decline_count || 0,
+          news_count: row.news_count || 0,
+        },
+        money_flow: {
+          main_net_inflow: row.main_net_inflow,
+          main_net_pct: row.main_net_pct,
+          super_large_inflow: row.super_large_inflow,
+          large_inflow: row.large_inflow,
+          medium_inflow: row.medium_inflow,
+          small_inflow: row.small_inflow,
+        },
+        leader: {
+          code: row.leader_code || '',
+          name: row.leader_name || '',
+          pct_change: row.leader_pct_change,
+        },
+        hot_stocks: [],
+        stocks: [],
+        news: [],
+        news_timeline: [],
+        news_stats: {
+          positive: row.positive_news || 0,
+          negative: row.negative_news || 0,
+          neutral: row.neutral_news || 0,
+          impact_score: row.news_impact_score || 0,
+        },
+        flow_history: (state.sectors || {}).flow_history || [],
+      };
+    }
     async function openSector(code) {
       if (!code) return;
       state.activeSector = code;
-      state.sectorDetail = state.sectorDetailCache[code] || null;
+      state.sectorDetail = state.sectorDetailCache[code] || buildSectorFallbackDetail(code);
       switchSection('sectors');
       renderSectors({ preserveScroll: false });
-      if (state.sectorDetailCache[code]) return;
-      state.sectorDetail = await api(`/api/v1/sectors/${encodeURIComponent(code)}`, { timeout: 16000 }).catch(e => ({ error: e.message }));
-      if (!state.sectorDetail.error) state.sectorDetailCache[code] = state.sectorDetail;
+      const detail = await api(`/api/v1/sectors/${encodeURIComponent(code)}`, { timeout: 12000, noCache: true }).catch(e => buildSectorFallbackDetail(code, e.message));
+      state.sectorDetail = detail;
+      if (!detail.error) state.sectorDetailCache[code] = detail;
       renderSectors({ preserveScroll: false });
     }
     async function refreshAIConfig(showToast = true) {
@@ -1805,7 +2772,8 @@
       toast(res.ok ? '默认模型已保存' : (res.error || '模型保存失败'));
     }
     async function clearAIConfig() {
-      const res = await api('/api/v1/ai/config/clear', { method: 'POST', body: '{}' }).catch(e => ({ ok: false, error: e.message }));
+      if (!confirm('确认清空主模型、接口地址和密钥？此操作只应在你手动要求时执行。')) return;
+      const res = await api('/api/v1/ai/config/clear', { method: 'POST', body: JSON.stringify({ confirm: true }) }).catch(e => ({ ok: false, error: e.message }));
       state.ai.detectResult = null;
       if (res.config) state.ai.config = res.config;
       renderAI();
@@ -2060,6 +3028,7 @@
       if (state.active === 'tradeReview') renderTradeReview();
       if (state.active === 'agents') renderAgents();
       if (state.active === 'roadmap') renderRoadmap();
+      requestAnimationFrame(enhanceInteractiveSurface);
     }
     function head(title, desc) {
       return `<div class="head"><div><h2>${title}</h2><p>${desc}</p></div><p>最后更新 ${state.lastUpdate}</p></div>`;
@@ -2455,6 +3424,39 @@
       ];
       return bits.join(' ');
     }
+    function capitalSentimentName(value) {
+      return ({
+        inflow: '主力流入',
+        outflow: '主力流出',
+        neutral: '中性',
+        chasing: '散户追涨',
+        leaving: '散户撤离',
+        unknown: '待确认'
+      })[value] || safeText(value, '待确认');
+    }
+    function renderRetailInstitutionFlowLine(flow = {}) {
+      if (!flow || flow.data_status !== 'ready') return '主力/散户占比待确认，需先刷新资金流缓存';
+      const mainRatio = Math.max(0, num(flow.main_ratio_pct));
+      const retailRatio = Math.max(0, num(flow.retail_ratio_pct));
+      const institutionRatio = Math.max(0, num(flow.institution_ratio_pct));
+      const largeRatio = Math.max(0, num(flow.large_ratio_pct));
+      const pressure = num(flow.retail_pressure, 50);
+      let conclusion = '多空资金结构中性，等待下一次资金确认';
+      if (num(mainRatio) > 10 && pressure <= 58) conclusion = '主力占优且散户压力不高，承接质量较好';
+      else if (num(mainRatio) === 0 && pressure >= 58) conclusion = '主力承接偏弱，谨慎追买';
+      else if (num(retailRatio) > 15 && num(mainRatio) <= 0) conclusion = '散户/中单占比偏高，容易冲高回落';
+      else if (num(institutionRatio) > 18 && num(mainRatio) >= 0) conclusion = '机构/基金参与较多，需看是否形成合力';
+      return [
+        `主力净流入${amount(flow.main_net_inflow)}`,
+        `主力占比${pct(mainRatio)}`,
+        `散户/中单占比${pct(retailRatio)}`,
+        `机构/基金占比${pct(institutionRatio)}`,
+        `游资/大单占比${pct(largeRatio)}`,
+        `散户压力${safeText(flow.retail_pressure)}`,
+        `${capitalSentimentName(flow.main_sentiment)}/${capitalSentimentName(flow.retail_sentiment)}`,
+        conclusion
+      ].join('，');
+    }
     function renderScreeningContext(s = {}) {
       const logic = s.screening_logic || {};
       const sectors = ((logic.sector || {}).matched || []).slice(0, 2);
@@ -2582,6 +3584,11 @@
       const aiMeta = (state.aiRecommendations || {}).ai_meta || {};
       const aiSummary = (state.aiRecommendations || {}).summary || {};
       const aiError = (state.aiRecommendations || {}).error || (aiSummary.method === 'AI未完成，本次不生成推荐结果' ? aiSummary.market_view : '');
+      const aiJob = state.aiPickJob || {};
+      const aiJobRunning = ['queued', 'running', 'poll_error'].includes(aiJob.status);
+      const aiJobBand = aiJobRunning
+        ? `<div class="card pad" style="border-color:#d8e4ff;background:#f7fbff"><div class="panel-title">AI选股后台运行中</div><p class="note">${escapeHtml(aiJob.message || 'AI选股任务仍在后台运行')}</p><p class="note">任务：${escapeHtml(aiJob.job_id || '--')} · ${escapeHtml(aiJob.updated_at || '')}</p></div><div style="height:14px"></div>`
+        : '';
       document.getElementById('signals').innerHTML = `
         ${head('交易信号', 'AI自动选股只展示推荐购买；手动AI判断会说明暂不推荐、短线或长线，并给出原因。')}
         <div class="toolbar">
@@ -2593,6 +3600,7 @@
         </div>
         <div class="grid cols-4">${metric('AI购买推荐', aiRows.length, safeText((state.aiRecommendations || {}).generated_at, '尚未运行'), aiRows.length ? 'up' : 'muted')}${metric('手动AI判断', manualRows.length, '自选或详情页触发', manualRows.length ? 'warn' : 'muted')}${metric('短线震荡池', shockRows.length, '先震荡入池，再按逻辑选优', 'up')}${metric('熔断状态', state.kill.active ? '已熔断' : '正常', safeText(state.kill.reason, '无'), state.kill.active ? 'up' : 'down')}</div>
         <div style="height:14px"></div>
+        ${aiJobBand}
         ${aiError ? `<div class="card pad" style="border-color:#ffd6d9;background:#fff7f7"><div class="panel-title up">AI本次未完成</div><p class="note">${escapeHtml(aiError)}</p></div><div style="height:14px"></div>` : ''}
         <div class="card table-wrap"><div class="panel-title">AI推荐购买</div><table><thead><tr><th>股票</th><th class="num">AI分</th><th>动作</th><th>建议买入时间</th><th class="num">买单价</th><th class="num">卖单价</th><th class="num">止损价</th><th>依据</th><th>操作</th></tr></thead><tbody>${renderAIRecommendationRows(aiRows, '暂无推荐购买。AI会过滤掉暂不买入、等待确认和风控未通过的股票。')}</tbody></table></div>
         <div style="height:14px"></div>
@@ -2661,20 +3669,60 @@
       return list.map(s => `<div class="score-cell" style="margin-bottom:10px;cursor:pointer" onclick="openStock('${s.code}')"><div style="display:flex;justify-content:space-between;gap:10px"><strong>${escapeHtml(s.name || s.code)}</strong><span class="badge ${type === 'buy' ? 'red' : 'green'}">${type === 'buy' ? '买入' : '卖出'}</span></div><div class="score-label" style="margin-top:8px">${escapeHtml(s.reason || '')}</div><div style="display:flex;justify-content:space-between;margin-top:10px"><span>${price(s.price)}</span><strong>${safeText(s.strength, 'medium')}</strong></div></div>`).join('');
     }
     function renderPortfolio() {
+      const trustee = state.aiTrustee || {};
+      const sim = trustee.simulation || {};
+      const live = trustee.live || {};
+      const fees = trustee.fees || {};
+      const calToday = trustee.calendar_today || {};
+      const indicator = trustee.indicator || trustee.trustee_light || {};
+      const lightColor = ['red', 'green', 'gray'].includes(indicator.color) ? indicator.color : 'gray';
+      const selfTest = indicator.self_test || sim.self_test || {};
+      const selfChecks = selfTest.checks || [];
+      const today = new Date().toISOString().slice(0, 10);
+      const defaultEnd = sim.end_date || today;
       document.getElementById('portfolio').innerHTML = `
-        ${head('持仓交易', '左侧实操盘预留证券账户接口，右侧模拟盘用于挂单买入卖出和风控长测。')}
+        ${head('操盘与模拟盘', '实操盘保留权限边界；模拟盘AI托管可自由读取站内数据和选择股票，但只能执行模拟盘交易并完整记录来去。')}
         <div class="grid cols-2">
           <div class="card pad">
-            <div class="panel-title" style="padding:0 0 12px;border-bottom:0">实操盘</div>
-            <div class="loading">真实证券账户接口预留中。后续接入券商或 QMT 前，需要账户权限隔离、人工确认、风控一票否决和长期模拟验证。</div>
+            <div class="panel-title" style="padding:0 0 12px;border-bottom:0">操盘</div>
+            <div class="toolbar" style="margin-bottom:10px">
+              <div class="field"><label>托管至</label><input id="liveTrusteeEndDate" type="text" readonly onclick="openTrusteeCalendar('liveTrusteeEndDate')" value="${escapeHtml(defaultEnd)}"></div>
+              <button class="btn danger" onclick="startAITrustee('live')">AI托管</button>
+              <button class="btn" onclick="openAITrusteeRecords()">AI托管记录</button>
+            </div>
+            <div class="kv">
+              ${kv('当前权限', escapeHtml(live.message || '实操盘托管暂未开放，真实交易不会自动下单。'))}
+              ${kv('状态', escapeHtml(live.status || 'blocked'))}
+              ${kv('说明', '真实交易接口只预留页面入口；当前AI绝对购买权只作用于模拟盘。')}
+            </div>
           </div>
           <div class="card pad">
             <div class="panel-title" style="padding:0 0 12px;border-bottom:0">模拟盘</div>
-            <div class="note">当前买入、卖出、挂单测试均走模拟盘，仍会经过风控和熔断检查。</div>
+            <div class="toolbar" style="margin-bottom:10px">
+              <div class="field"><label>托管至</label><input id="simulationTrusteeEndDate" type="text" readonly onclick="openTrusteeCalendar('simulationTrusteeEndDate')" value="${escapeHtml(defaultEnd)}"></div>
+              <span class="trustee-status-pill" title="${escapeHtml(indicator.message || '')}"><i class="trustee-light ${lightColor}"></i>${escapeHtml(indicator.label || '未托管')}</span>
+              ${sim.enabled ? `<button class="btn green" onclick="stopAITrustee('simulation')">停止托管</button>` : `<button class="btn primary" onclick="startAITrustee('simulation')">AI托管</button>`}
+              <button class="btn" onclick="refreshAITrustee()">刷新托管</button>
+              <button class="btn" onclick="openAITrusteeRecords()">AI托管记录</button>
+              <button class="btn blue" onclick="runAITrusteeReview()">三点后复盘</button>
+            </div>
+            <div class="kv">
+              ${kv('托管状态', `${sim.enabled ? '运行中' : '未开启'} / ${escapeHtml(sim.status || 'idle')}`)}
+              ${kv('指示灯', `<span class="trustee-status-pill"><i class="trustee-light ${lightColor}"></i>${escapeHtml(indicator.message || '尚未开启AI托管')}</span>`)}
+              ${kv('自检结果', escapeHtml(selfTest.status ? `${selfTest.status}${selfChecks.length ? `，${selfChecks.filter(x => x.ok).length}/${selfChecks.length}项通过` : ''}` : '待启动'))}
+              ${kv('托管期限', escapeHtml(sim.requested_end_date && sim.requested_end_date !== sim.end_date ? `${sim.requested_end_date}，实际清仓日 ${sim.end_date}` : (sim.end_date || '未选择')))}
+              ${kv('AI策略', escapeHtml(sim.strategy || '开启后按期限自动选择'))}
+              ${kv('运行说明', escapeHtml(sim.message || '尚未开启AI托管'))}
+              ${kv('今日开市', `${calToday.is_trading_day ? '交易日' : '闭市'} / ${escapeHtml(calToday.reason || '待确认')} / ${calToday.is_trading_hours ? '盘中' : '非盘中'} / ${escapeHtml(calToday.market_session_label || indicator.session_label || '')}`)}
+              ${kv('费用规则', `佣金${pct(num(fees.commission_rate) * 100)}，印花税${pct(num(fees.stamp_tax_rate) * 100)}，过户费${pct(num(fees.transfer_fee_rate) * 100)}`)}
+              ${kv('AI权限', '短线/长线只是界面参考，AI可自由调动智能选股或自建逻辑；只读站内数据，不改网站配置。')}
+              ${kv('交易窗口', '仅交易日9:15-11:30、13:00-15:00允许实时挂单，集合竞价可参与；非交易时段只分析记录。')}
+              ${kv('真实规则', `T+1、100股整数倍、涨跌停排队、排队前方股数与成交量推进、无创业板/科创板/北交所权限。`)}
+            </div>
           </div>
         </div>
         <div style="height:14px"></div>
-        <div class="grid cols-4">${metric('总资产', money(state.portfolio.total_asset), '模拟盘')}${metric('可用资金', money(state.portfolio.available_cash), '现金')}${metric('持仓市值', money(state.portfolio.market_value), `${state.positions.length}只`)}${metric('今日盈亏', `${num(state.portfolio.today_profit) >= 0 ? '+' : ''}${money(state.portfolio.today_profit)}`, '已实现', num(state.portfolio.today_profit) >= 0 ? 'up' : 'down')}</div>
+        <div class="grid cols-4">${metric('总资产', money(state.portfolio.total_asset), '模拟盘')}${metric('可用资金', money(state.portfolio.available_cash), '现金')}${metric('持仓市值', money(state.portfolio.market_value), `${state.positions.length}只`)}${metric('AI托管记录', `${trustee.event_count || 0}条`, `挂单${trustee.pending_count || 0} / 成交${trustee.fill_count || 0}`)}</div>
         <div style="height:14px"></div>
         <div class="card table-wrap"><table><thead><tr><th>股票</th><th class="num">持仓</th><th class="num">可卖</th><th class="num">成本</th><th class="num">现价</th><th class="num">浮盈</th><th class="num">止损</th></tr></thead><tbody>
           ${state.positions.map(p => `<tr onclick="openStock('${p.code}')"><td><div class="stock-name">${escapeHtml(p.name || p.code)}</div><div class="stock-code">${escapeHtml(p.code)}</div></td><td class="num">${p.quantity}</td><td class="num">${p.available_quantity}</td><td class="num">${price(p.avg_cost)}</td><td class="num">${price(p.current_price)}</td><td class="num ${num(p.floating_profit) >= 0 ? 'up' : 'down'}">${money(p.floating_profit)}</td><td class="num up">${price(p.stop_loss)}</td></tr>`).join('') || '<tr><td colspan="7"><div class="loading">暂无持仓</div></td></tr>'}
@@ -2862,13 +3910,15 @@
         </div>
       `).join('') || '<div class="loading">暂无板块相关新闻</div>';
     }
-    function renderSectorStocks(stocks = []) {
+    function renderSectorStocks(stocks = [], loading = false) {
+      if (loading) return '<div class="loading">正在加载中...</div>';
       return `<div class="table-wrap"><table><thead><tr><th>股票</th><th class="num">价格</th><th class="num">涨跌幅</th><th class="num">成交额</th><th>操作</th></tr></thead><tbody>${
         stocks.slice(0, 12).map(s => `<tr><td><div class="stock-name">${escapeHtml(s.name || s.code)}</div><div class="stock-code">${escapeHtml(s.code || '')}</div></td><td class="num">${price(s.price)}</td><td class="num ${clsByPct(s.pct_change)}">${pct(s.pct_change)}</td><td class="num">${amount(s.amount)}</td><td><button class="btn" onclick="openStock('${escapeHtml(s.code)}')">详情</button></td></tr>`).join('')
         || '<tr><td colspan="5"><div class="loading">暂无成分股数据</div></td></tr>'
       }</tbody></table></div>`;
     }
-    function renderSectorTimeline(news = []) {
+    function renderSectorTimeline(news = [], loading = false) {
+      if (loading) return '<div class="loading">正在加载中...</div>';
       const rows = (news || []).slice(0, 80);
       if (!rows.length) return '<div class="loading">暂无板块利好利空时间线</div>';
       const groups = [];
@@ -2900,13 +3950,15 @@
       const d = state.sectorDetail;
       if (!state.activeSector) return '<div class="card pad"><div class="loading">点击左侧任一板块查看详情。</div></div>';
       if (!d) return '<div class="card pad"><div class="loading">正在加载板块详情...</div></div>';
-      if (d.error) return `<div class="card pad"><div class="loading">板块详情加载失败：${escapeHtml(d.error)}</div></div>`;
       const flow = d.money_flow || {};
       const summary = d.summary || {};
       const stats = d.news_stats || {};
       const leader = d.leader || {};
+      const loadingDetail = !!d.loading;
       return `
         <div class="grid">
+          ${d.error ? `<div class="card pad"><div class="note">完整详情加载超时或被浏览器中断，当前先展示板块列表中的资金流与涨跌基础数据。可以稍后再点一次，或点击“刷新板块资金流”。错误：${escapeHtml(d.error)}</div></div>` : ''}
+          ${d.partial && !d.error ? '<div class="card pad"><div class="note">正在补全成分股和新闻时间线，当前先展示资金流基础数据。</div></div>' : ''}
           <div class="card pad">
             <div class="panel-title" style="padding:0 0 12px;border-bottom:0">${escapeHtml(d.name || state.activeSector)} <span class="badge blue">${sectorTypeName(d.sector_type)}</span></div>
             <div class="grid cols-4">
@@ -2926,8 +3978,8 @@
               <div class="flow-pill"><span>主力占比</span><b>${pct(flow.main_net_pct)}</b></div>
             </div>
           </div>
-          <div class="card"><div class="panel-title">龙头股 / 热门股</div><div class="panel-body">${renderSectorStocks(d.hot_stocks || d.stocks || [])}</div></div>
-          <div class="card"><div class="panel-title">板块新闻时间线</div><div class="panel-body">${renderSectorTimeline(d.news_timeline || d.news || [])}</div></div>
+          <div class="card"><div class="panel-title">龙头股 / 热门股</div><div class="panel-body">${renderSectorStocks(d.hot_stocks || d.stocks || [], loadingDetail)}</div></div>
+          <div class="card"><div class="panel-title">板块新闻时间线</div><div class="panel-body">${renderSectorTimeline(d.news_timeline || d.news || [], loadingDetail)}</div></div>
         </div>`;
     }
     function renderSectors(options = {}) {
@@ -3234,6 +4286,7 @@
           </div></div></div>
         </div>
       `;
+      requestAnimationFrame(enhanceInteractiveSurface);
     }
     function dataRuleName(key) {
       return ({ universe_sync: '主数据', kline_backfill: 'K线补库', realtime: '实时快照', intraday: '分时队列', priority: '优先级' })[key] || key;
@@ -3662,7 +4715,7 @@
     function renderChipPanel(chips = {}, currentPrice = 0) {
       const prices = chips.prices || [];
       const bins = chips.bins || [];
-      if (!prices.length || !bins.length) return '<div class="loading">暂无筹码峰缓存；需要先完成已验证日K补库。</div>';
+      if (!prices.length || !bins.length) return '<div class="loading">数据缺失</div>';
       const maxBin = Math.max(...bins, 1);
       const rows = prices.map((p, i) => ({ price: num(p), weight: num(bins[i]) })).sort((a, b) => b.price - a.price);
       return `<div class="kv" style="margin-bottom:10px">
@@ -3682,7 +4735,7 @@
         const item = items[key] || {};
         const ok = !!item.available;
         return kv(name, `<span class="badge ${ok ? 'green' : 'red'}">${ok ? '可用' : '缺失'}</span> ${escapeHtml(item.source || '--')} / ${escapeHtml(item.validation_status || '--')}`);
-      }).join('')}</div><div class="note" style="margin-top:10px">详情页只展示真实缓存、已校验数据或明确推导数据；缺失项不会伪造成真实行情。</div>`;
+      }).join('')}</div><div class="note" style="margin-top:10px">详情页只展示真实缓存、已校验数据或明确推导数据；缺失项显示“数据缺失”。</div>`;
     }
     function renderStockInfoPanel(info = {}, realtime = {}) {
       return `<div class="kv">
@@ -3722,6 +4775,7 @@
       const finance = evidence.估值财务 || {};
       const risk = evidence.风控 || {};
       const youzi = rec.youzi_experience || evidence.youzi_experience || {};
+      const capitalStructure = rec.retail_institution_flow || evidence.capital_structure || evidence.retail_institution_flow || {};
       const probs = rec.probability_ladder || [];
       return `
         <div class="grid cols-4" style="margin-bottom:12px">
@@ -3735,6 +4789,7 @@
           ${kv('为什么买/等', rec.ai_reason || '--')}
           ${kv('K线依据', `5日${pct(kline.pct_5)}，20日${pct(kline.pct_20)}，近3日/10日量能${safeText(kline.volume_ratio_3_10)}`)}
           ${kv('交易量依据', `量比${safeText(volume.量比)}，换手${safeText(volume.换手率)}%，成交额${amount(volume.成交额)}`)}
+          ${kv('主力/散户占比', renderRetailInstitutionFlowLine(capitalStructure))}
           ${kv('业绩/暴雷风险', (finance.notes || []).join('；') || ((finance.missing || []).length ? `缺少${finance.missing.join('、')}，暂按中性并要求人工补财报` : '未发现已接入数据中的明确暴雷字段'))}
           ${kv('风控结论', risk.approved ? '风控通过' : `风控未通过/等待：${risk.veto_reason || '--'}`)}
           ${kv('游资经验因子', renderYouziExperienceLine(youzi))}
@@ -3767,10 +4822,6 @@
     }
     function buildFiveLevelBook(realtime = {}, minutes = []) {
       const lastMinute = (minutes || []).filter(m => num(m.price) > 0).slice(-1)[0] || {};
-      const base = getFirstNumber(realtime, ['price', 'last_price', 'close'], num(lastMinute.price, 0));
-      const preClose = getFirstNumber(realtime, ['pre_close', 'prev_close'], base);
-      const realBid1 = getFirstNumber(realtime, ['bid_price1', 'bid1_price', 'buy1_price'], 0);
-      const realAsk1 = getFirstNumber(realtime, ['ask_price1', 'ask1_price', 'sell1_price'], 0);
       const levels = { bids: [], asks: [] };
       let hasRealBook = false;
       for (let i = 1; i <= 5; i++) {
@@ -3783,35 +4834,12 @@
         levels.asks.push({ level: `S${i}`, price: askPrice, volume: askVolume });
       }
       if (hasRealBook) return { ...levels, source: 'real_l1' };
-
-      const priceBase = base || preClose || 10;
-      const tick = priceBase >= 100 ? 0.05 : 0.01;
-      const pctChange = getFirstNumber(realtime, ['pct_change'], preClose ? (priceBase - preClose) / preClose * 100 : 0);
-      const volumeRatio = getFirstNumber(realtime, ['volume_ratio'], 1);
-      const totalVolume = getFirstNumber(realtime, ['volume'], (minutes || []).reduce((sum, m) => sum + num(m.volume), 0));
-      const seedVolume = Math.max(300, Math.round(totalVolume / 180 || 1200));
-      const lean = Math.max(-0.35, Math.min(0.35, pctChange / 18 + (volumeRatio - 1) * 0.08));
-      levels.bids = [];
-      levels.asks = [];
-      for (let i = 1; i <= 5; i++) {
-        levels.bids.push({
-          level: `B${i}`,
-          price: roundTick(priceBase - tick * i),
-          volume: Math.round(seedVolume * (1.18 - i * 0.08) * (1 + lean))
-        });
-        levels.asks.push({
-          level: `S${i}`,
-          price: roundTick(priceBase + tick * i),
-          volume: Math.round(seedVolume * (1.12 - i * 0.07) * (1 - lean))
-        });
-      }
-      return { ...levels, source: realBid1 || realAsk1 ? 'partial_l1' : 'estimated' };
+      return { bids: [], asks: [], source: 'unavailable' };
     }
     function analyzeActiveFlow(minutes = [], realtime = {}) {
       const rows = (minutes || []).filter(m => num(m.price) > 0 && num(m.amount) > 0);
       if (rows.length < 2) {
-        const amountValue = getFirstNumber(realtime, ['amount'], 0);
-        return { buy_amount: amountValue * 0.5, sell_amount: amountValue * 0.5, buy_ratio: 50, sell_ratio: 50, source: 'quote_estimated', large_ticks: [] };
+        return { buy_amount: null, sell_amount: null, buy_ratio: null, sell_ratio: null, source: 'unavailable', large_ticks: [] };
       }
       const amounts = rows.map(r => num(r.amount)).sort((a, b) => a - b);
       const median = amounts[Math.floor(amounts.length / 2)] || 1;
@@ -3833,7 +4861,7 @@
         }
       });
       const total = buy + sell || 1;
-      return { buy_amount: buy, sell_amount: sell, buy_ratio: buy / total * 100, sell_ratio: sell / total * 100, source: 'minute_estimated', large_ticks: largeTicks.slice(-6).reverse() };
+      return { buy_amount: buy, sell_amount: sell, buy_ratio: buy / total * 100, sell_ratio: sell / total * 100, source: 'minute_calculated', large_ticks: largeTicks.slice(-6).reverse() };
     }
     function analyzeOrderBook(detail = {}, minutes = [], klines = []) {
       const realtime = detail.realtime || detail || {};
@@ -3933,9 +4961,11 @@
     function startRealtimePolling(code) {
       stopRealtimePolling(false);
       state.realtimeCode = code;
+      if (!isCNTradingSession()) return;
       api('/api/v1/market/realtime/watch', { method: 'POST', body: JSON.stringify({ codes: [code], interval_seconds: 1 }) }).catch(() => ({}));
       state.realtimePoller = setInterval(async () => {
         if (!document.getElementById('stockModal').classList.contains('open') || state.realtimeCode !== code) return stopRealtimePolling();
+        if (!isCNTradingSession()) return stopRealtimePolling();
         const snap = await api(`/api/v1/market/snapshot/${code}`, { timeout: 3500 }).catch(() => null);
         if (!snap || snap.error) return;
         const livePrice = document.getElementById('livePrice');
@@ -4554,6 +5584,55 @@
       }
     }
 
+    function initPremiumPointerEffects() {
+      const root = document.documentElement;
+      const canHover = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+      const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (!canHover || reduceMotion) return;
+      let raf = 0;
+      document.addEventListener('pointermove', (event) => {
+        if (raf) return;
+        raf = requestAnimationFrame(() => {
+          root.style.setProperty('--cursor-x', `${event.clientX}px`);
+          root.style.setProperty('--cursor-y', `${event.clientY}px`);
+          raf = 0;
+        });
+      }, { passive: true });
+      document.addEventListener('pointerover', (event) => {
+        const card = event.target.closest('.interactive-card, .strategy-card, .sector-card, .agent-card, .chart-box, .placeholder, .hero');
+        if (!card) return;
+        card.addEventListener('pointermove', handleInteractiveCardMove, { passive: true });
+        card.addEventListener('pointerleave', resetInteractiveCard, { once: true });
+      }, { passive: true });
+    }
+    function enhanceInteractiveSurface() {
+      document.querySelectorAll('.card, .placeholder, .chart-box').forEach(el => {
+        if (el.classList.contains('table-wrap') || el.classList.contains('interactive-card')) return;
+        el.classList.add('interactive-card');
+      });
+    }
+    function handleInteractiveCardMove(event) {
+      const el = event.currentTarget;
+      const rect = el.getBoundingClientRect();
+      if (!rect.width || !rect.height) return;
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+      const px = x / rect.width;
+      const py = y / rect.height;
+      const rotateY = (px - .5) * 5;
+      const rotateX = (.5 - py) * 4;
+      el.style.setProperty('--card-x', `${px * 100}%`);
+      el.style.setProperty('--card-y', `${py * 100}%`);
+      el.style.transform = `perspective(900px) rotateX(${rotateX}deg) rotateY(${rotateY}deg) translateY(-2px)`;
+    }
+    function resetInteractiveCard(event) {
+      const el = event.currentTarget;
+      el.removeEventListener('pointermove', handleInteractiveCardMove);
+      el.style.transform = '';
+      el.style.removeProperty('--card-x');
+      el.style.removeProperty('--card-y');
+    }
+
     async function bootstrap() {
       loadWatchlist();
       loadStrategy();
@@ -4562,6 +5641,8 @@
       initAIChatDrag();
       applyAIChatLayout();
       initNav();
+      initPremiumPointerEffects();
+      enhanceInteractiveSurface();
       document.addEventListener('pointermove', (event) => {
         state.pointer = { x: event.clientX, y: event.clientY };
       }, { passive: true });
@@ -4571,9 +5652,20 @@
           toggleAIChat();
         }
       });
-      await Promise.all([refreshAll(), loadScreeningCache(), loadSignals()]);
       renderDashboard();
-      setInterval(refreshAll, 15000);
+      refreshShell().catch(() => {});
+      ensureSectionData('dashboard').catch(() => {});
+      setTimeout(() => ensureSectionData(state.active).catch(() => {}), 250);
+      renderDashboard();
+      setInterval(() => {
+        refreshShell({ renderAfter: state.active === 'dashboard' || state.active === 'news' }).catch(() => {});
+      }, 60000);
+      setInterval(() => {
+        if (!isCNTradingSession()) return;
+        if (state.active === 'market') refreshMarketData().catch(() => {});
+        if (state.active === 'signals') refreshSignalsData().catch(() => {});
+        if (state.active === 'portfolio') refreshPortfolioData().catch(() => {});
+      }, 15000);
       setInterval(() => {
         if (state.active === 'sectors') refreshSectors(false);
       }, 8000);

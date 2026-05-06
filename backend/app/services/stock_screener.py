@@ -1,4 +1,4 @@
-"""
+﻿"""
 多因子选股引擎 - 5阶段筛选流程
 Stage 1: 硬性过滤（剔除ST/暴雷/停牌等）
 Stage 2: 量价因子评分
@@ -146,6 +146,114 @@ def _to_float(value, default: float = 0.0) -> float:
 
 def _clamp(value: float, low: float = 0.0, high: float = 100.0) -> float:
     return max(low, min(high, value))
+
+
+def _count_alternating_range_swings(df: pd.DataFrame) -> dict:
+    """Detect repeated support/resistance swings without using fixed prices."""
+    if df is None or len(df) < 30:
+        return {
+            "ready": False,
+            "support_line": 0,
+            "resistance_line": 0,
+            "range_height_pct": 0,
+            "support_events": 0,
+            "resistance_events": 0,
+            "swing_legs_60": 0,
+            "swing_legs_22": 0,
+            "complete_swings_60": 0,
+            "complete_swings_22": 0,
+        }
+    window = df.tail(60 if len(df) >= 60 else len(df)).reset_index(drop=True)
+    high = window["high"].astype(float)
+    low = window["low"].astype(float)
+    support = _to_float(low.quantile(0.12))
+    resistance = _to_float(high.quantile(0.88))
+    mid = (support + resistance) / 2 if support and resistance else 0
+    height_pct = (resistance - support) / mid * 100 if mid else 0
+    support_band = max(support * 0.035, (resistance - support) * 0.12)
+    resistance_band = max(resistance * 0.035, (resistance - support) * 0.12)
+    events = []
+    last_zone = ""
+    support_events = []
+    resistance_events = []
+    for idx, row in window.iterrows():
+        day_low = _to_float(row.get("low"))
+        day_high = _to_float(row.get("high"))
+        zone = ""
+        if support and abs(day_low - support) <= support_band:
+            zone = "support"
+        elif resistance and abs(day_high - resistance) <= resistance_band:
+            zone = "resistance"
+        if zone and zone != last_zone:
+            events.append((idx, zone))
+            if zone == "support":
+                support_events.append(idx)
+            else:
+                resistance_events.append(idx)
+            last_zone = zone
+
+    def count_legs(rows: list[tuple[int, str]]) -> int:
+        legs = 0
+        last = ""
+        for _, zone in rows:
+            if last and zone != last:
+                legs += 1
+            last = zone
+        return legs
+
+    recent_events = [(idx, zone) for idx, zone in events if idx >= max(0, len(window) - 22)]
+    legs_60 = count_legs(events)
+    legs_22 = count_legs(recent_events)
+    support_error = (
+        float((low.iloc[support_events] - support).abs().mean() / support * 100)
+        if support_events and support else 99
+    )
+    resistance_error = (
+        float((high.iloc[resistance_events] - resistance).abs().mean() / resistance * 100)
+        if resistance_events and resistance else 99
+    )
+    ready = (
+        12 <= height_pct <= 45
+        and len(support_events) >= 2
+        and len(resistance_events) >= 2
+        and legs_60 >= 6
+        and support_error <= 4.5
+        and resistance_error <= 4.5
+    )
+    mid_crosses = 0
+    if mid:
+        closes = window["close"].astype(float) if "close" in window.columns else (high + low) / 2
+        last_side = ""
+        for close_price in closes:
+            side = "upper" if close_price >= mid else "lower"
+            if last_side and side != last_side:
+                mid_crosses += 1
+            last_side = side
+    return {
+        "ready": ready,
+        "box_pattern_ready": bool(
+            12 <= height_pct <= 45
+            and len(support_events) >= 2
+            and len(resistance_events) >= 2
+            and legs_60 >= 6
+            and support_error <= 4.5
+            and resistance_error <= 4.5
+        ),
+        "support_line": round(support, 2),
+        "resistance_line": round(resistance, 2),
+        "range_height_pct": round(height_pct, 2),
+        "support_events": len(support_events),
+        "resistance_events": len(resistance_events),
+        "upper_touch_count": len(resistance_events),
+        "lower_touch_count": len(support_events),
+        "mid_cross_count": mid_crosses,
+        "swing_legs_60": legs_60,
+        "swing_legs_22": legs_22,
+        "complete_swings_60": round(legs_60 / 2, 1),
+        "complete_swings_22": round(legs_22 / 2, 1),
+        "support_touch_error_pct": round(support_error, 2),
+        "resistance_touch_error_pct": round(resistance_error, 2),
+    }
 
 
 def _score_range(value: float, good_low: float, good_high: float, *, missing: float = 55.0) -> float:
@@ -337,6 +445,11 @@ def summarize_retail_institution_flow(code: str) -> dict:
             "main_net_inflow": 0,
             "large_net_inflow": 0,
             "retail_pressure": 50,
+            "main_ratio_pct": 0,
+            "retail_ratio_pct": 0,
+            "institution_ratio_pct": 0,
+            "large_ratio_pct": 0,
+            "money_flow_ratio_pct": 0,
             "main_sentiment": "unknown",
             "retail_sentiment": "unknown",
             "notes": ["缺少资金流缓存"],
@@ -349,6 +462,9 @@ def summarize_retail_institution_flow(code: str) -> dict:
     amount_base = max(abs(main) + abs(large) + abs(small) + abs(medium), 1.0)
     main_ratio = round(main / amount_base * 100, 2)
     retail_ratio = round((small + medium) / amount_base * 100, 2)
+    institution_ratio = round(max(0.0, large) / amount_base * 100, 2)
+    large_ratio = round(max(0.0, large) / amount_base * 100, 2)
+    money_flow_ratio = round((abs(main) + abs(large) + abs(small) + abs(medium)) / amount_base * 100, 2)
     retail_pressure = _clamp(50 + retail_ratio * 0.45 - main_ratio * 0.35)
     return {
         "data_status": "ready",
@@ -357,12 +473,16 @@ def summarize_retail_institution_flow(code: str) -> dict:
         "small_medium_net_inflow": small + medium,
         "main_ratio_pct": main_ratio,
         "retail_ratio_pct": retail_ratio,
+        "institution_ratio_pct": institution_ratio,
+        "large_ratio_pct": large_ratio,
+        "money_flow_ratio_pct": money_flow_ratio,
         "retail_pressure": round(retail_pressure, 1),
         "main_sentiment": "inflow" if main > 0 else "outflow" if main < 0 else "neutral",
         "retail_sentiment": "chasing" if retail_ratio > 15 and main_ratio < 0 else "leaving" if retail_ratio < -15 else "neutral",
         "notes": [
             f"主力占比{main_ratio:.1f}%",
             f"散户/中单压力{retail_ratio:.1f}%",
+            f"机构/游资占比{large_ratio:.1f}%",
         ],
     }
 
@@ -462,10 +582,17 @@ def score_support_pullback(stock: dict, daily_df: Optional[pd.DataFrame]) -> tup
     recent_down_days = int((lookback.tail(5)["pct_change"] < 0).sum()) if "pct_change" in lookback else 0
     latest_pct = _to_float(df.iloc[-1].get("pct_change")) if "pct_change" in df.columns else _to_float(stock.get("pct_change"))
     turnover = _to_float(stock.get("turnover_rate") or df.iloc[-1].get("turnover_rate"))
+    swing = _count_alternating_range_swings(df)
 
     score = 50.0
     notes = []
-    if 6 <= box_width_pct <= 28:
+    if swing.get("ready"):
+        score += 30
+        notes.append("三个月至少3次、一个月至少1.5次上下沿往返")
+    else:
+        score -= 24
+        notes.append("上下沿往返次数或触碰误差不足")
+    if 6 <= box_width_pct <= 45:
         score += 18
         notes.append("20日箱体震荡")
     elif box_width_pct < 6:
@@ -522,6 +649,9 @@ def score_support_pullback(stock: dict, daily_df: Optional[pd.DataFrame]) -> tup
         score -= 8
         notes.append("换手偏热")
 
+    if not swing.get("ready"):
+        score = min(score, 55)
+
     return round(_clamp(score), 1), {
         "box_high": round(box_high, 2),
         "box_low": round(box_low, 2),
@@ -532,6 +662,22 @@ def score_support_pullback(stock: dict, daily_df: Optional[pd.DataFrame]) -> tup
         "pct_5": round(pct_5, 2),
         "latest_pct": round(latest_pct, 2),
         "turnover": round(turnover, 2),
+        "repeated_range_ready": bool(swing.get("ready")),
+        "box_pattern_ready": bool(swing.get("box_pattern_ready")),
+        "support_line": swing.get("support_line"),
+        "resistance_line": swing.get("resistance_line"),
+        "range_height_pct": swing.get("range_height_pct"),
+        "support_event_count": swing.get("support_events"),
+        "resistance_event_count": swing.get("resistance_events"),
+        "upper_touch_count": swing.get("upper_touch_count"),
+        "lower_touch_count": swing.get("lower_touch_count"),
+        "mid_cross_count": swing.get("mid_cross_count"),
+        "swing_legs_60": swing.get("swing_legs_60"),
+        "swing_legs_22": swing.get("swing_legs_22"),
+        "complete_swings_60": swing.get("complete_swings_60"),
+        "complete_swings_22": swing.get("complete_swings_22"),
+        "support_touch_error_pct": swing.get("support_touch_error_pct"),
+        "resistance_touch_error_pct": swing.get("resistance_touch_error_pct"),
         "notes": notes[:6],
         "data_status": "ready",
     }
@@ -906,30 +1052,56 @@ def _support_pool_status(support_score: float, support_detail: dict) -> str:
     pct_5 = _to_float(support_detail.get("pct_5"), 99)
     latest_pct = _to_float(support_detail.get("latest_pct"), 99)
     turnover = _to_float(support_detail.get("turnover"), 0)
+    repeated_ready = bool(support_detail.get("repeated_range_ready"))
     rejected = any("跌破" in note or "涨幅偏高" in note or "仍在箱体高位" in note for note in notes)
     strict_shape = (
         0 <= near_support <= 4
-        and 4 <= drawdown <= 18
-        and 5 <= box_width <= 24
+        and 4 <= drawdown <= 45
+        and 5 <= box_width <= 45
         and ma20_slope <= 4
         and -12 <= pct_5 <= 2
-        and -5 <= latest_pct <= 2
+        and -15 <= latest_pct <= 4
         and 0.5 <= turnover <= 8
+        and repeated_ready
         and not rejected
     )
     watch_shape = (
-        0 <= near_support <= 7
-        and 2 <= drawdown <= 22
-        and 4 <= box_width <= 28
+        0 <= near_support <= 18
+        and 2 <= drawdown <= 45
+        and 4 <= box_width <= 48
         and ma20_slope <= 5
         and -14 <= pct_5 <= 4
-        and -6 <= latest_pct <= 3
+        and -15 <= latest_pct <= 5
+        and turnover <= 10
+        and repeated_ready
+        and not rejected
+    )
+    mature_range_watch = (
+        (
+            support_detail.get("box_pattern_ready") is True
+            or (
+                _to_float(support_detail.get("complete_swings_60"), 0) >= 2
+                and int(_to_float(support_detail.get("support_event_count"), 0)) >= 2
+                and int(_to_float(support_detail.get("resistance_event_count"), 0)) >= 2
+                and 12 <= _to_float(support_detail.get("range_height_pct"), 0) <= 45
+                and _to_float(support_detail.get("support_touch_error_pct"), 99) <= 4.5
+                and _to_float(support_detail.get("resistance_touch_error_pct"), 99) <= 4.5
+            )
+        )
+        and 0 <= near_support <= 14
+        and 4 <= drawdown <= 45
+        and 5 <= box_width <= 48
+        and ma20_slope <= 5
+        and -12 <= pct_5 <= 6
+        and -15 <= latest_pct <= 5
         and turnover <= 10
         and not rejected
     )
     if strict_shape and support_score >= 70:
         return "support_pool"
     if watch_shape and support_score >= 62:
+        return "near_support_watch"
+    if mature_range_watch and support_score >= 55:
         return "near_support_watch"
     if rejected:
         return "support_rejected"
@@ -1193,6 +1365,8 @@ def run_screening(limit: int = 50, return_all: bool = False, strategy: Optional[
     # Stage 2-4: 逐只评分
     scored_stocks = []
     for i, stock in enumerate(filtered):
+        if i and i % 20 == 0:
+            time.sleep(0.001)
         if progress_callback and (i == 0 or (i + 1) % 100 == 0 or i + 1 == len(filtered)):
             progress_callback({
                 "stage": "screening",
@@ -1364,7 +1538,7 @@ def run_screening(limit: int = 50, return_all: bool = False, strategy: Optional[
         strict_pool = [s for s in scored_stocks if s.get("support_pool_status") == "support_pool"]
         watch_pool = [s for s in scored_stocks if s.get("support_pool_status") == "near_support_watch"]
         if strict_pool:
-            selected = strict_pool if return_all else strict_pool + watch_pool
+            selected = strict_pool + watch_pool
             pool_mode = "support_pool"
         elif watch_pool:
             selected = watch_pool
