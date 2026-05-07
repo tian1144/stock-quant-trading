@@ -798,15 +798,17 @@ def _write_pdf_artifact(job_id: str, filename: str, markdown: str) -> str:
         from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
         from reportlab.lib.units import mm
         from reportlab.pdfbase import pdfmetrics
+        from reportlab.pdfbase.cidfonts import UnicodeCIDFont
         from reportlab.pdfbase.ttfonts import TTFont
         from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
         font_path = _find_chinese_font()
-        font_name = "SiteChinese"
         if font_path:
+            font_name = "SiteChinese"
             pdfmetrics.registerFont(TTFont(font_name, font_path))
         else:
-            font_name = "Helvetica"
+            font_name = "STSong-Light"
+            pdfmetrics.registerFont(UnicodeCIDFont(font_name))
         styles = getSampleStyleSheet()
         normal = ParagraphStyle("cn-normal", parent=styles["BodyText"], fontName=font_name, fontSize=10.5, leading=16, spaceAfter=6)
         h1 = ParagraphStyle("cn-h1", parent=styles["Heading1"], fontName=font_name, fontSize=18, leading=24, spaceAfter=10)
@@ -847,6 +849,12 @@ def _find_chinese_font() -> str:
         r"C:\Windows\Fonts\simhei.ttf",
         r"C:\Windows\Fonts\simsun.ttc",
         r"C:\Windows\Fonts\simfang.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJKsc-Regular.otf",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        "/usr/share/fonts/truetype/arphic/uming.ttc",
     ]
     for path in candidates:
         if os.path.exists(path):
