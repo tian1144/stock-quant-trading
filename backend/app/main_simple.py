@@ -59,6 +59,11 @@ PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 BACKEND_ROOT = os.path.dirname(os.path.dirname(__file__))
 SCREENING_JOB_DIR = os.path.join(BACKEND_ROOT, "data", "jobs", "screening")
 SERVER_BOOT_ID = f"{os.getpid()}-{int(time.time())}"
+REALTIME_SECOND_LIMIT = max(20, int(os.getenv("LIANGHUA_REALTIME_SECOND_LIMIT", "60") or 60))
+REALTIME_THIRD_LIMIT = max(20, int(os.getenv("LIANGHUA_REALTIME_THIRD_LIMIT", "60") or 60))
+REALTIME_BATCH_SIZE = max(10, int(os.getenv("LIANGHUA_REALTIME_BATCH_SIZE", "30") or 30))
+REALTIME_LOOP_SECONDS = max(3.0, float(os.getenv("LIANGHUA_REALTIME_LOOP_SECONDS", "10") or 10))
+INTRADAY_PRIORITY_SECONDS = max(30.0, float(os.getenv("LIANGHUA_INTRADAY_PRIORITY_SECONDS", "60") or 60))
 
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0'
 
@@ -870,9 +875,9 @@ def _is_postclose_window(now: datetime) -> bool:
     return 15 * 60 + 3 <= current <= 16 * 60
 
 
-def _build_realtime_refresh_codes(queues: dict, third_limit: int = 700) -> list:
+def _build_realtime_refresh_codes(queues: dict, second_limit: int = REALTIME_SECOND_LIMIT, third_limit: int = REALTIME_THIRD_LIMIT) -> list:
     first = list(queues.get("first") or [])
-    second = list(queues.get("second") or [])[:300]
+    second = list(queues.get("second") or [])[:max(int(second_limit), 0)]
     priority_codes = first + [code for code in second if code not in set(first)]
     third = [code for code in (queues.get("third_sample") or []) if code not in set(priority_codes)]
     if not third:
@@ -927,9 +932,9 @@ def _market_data_hub_loop():
                 market_data_hub.sync_universe(lambda: _load_stock_universe_fast(force_refresh=True))
                 _market_data_hub_job["last_universe_close_date"] = today
             if _is_realtime_window(now):
-                realtime_codes = _build_realtime_refresh_codes(queues, third_limit=700)
-                market_data_hub.refresh_realtime(realtime_codes, batch_size=50)
-                if not _market_data_hub_job.get("last_intraday_run_at") or time.time() - _market_data_hub_job.get("last_intraday_ts", 0) >= 30:
+                realtime_codes = _build_realtime_refresh_codes(queues)
+                market_data_hub.refresh_realtime(realtime_codes, batch_size=REALTIME_BATCH_SIZE)
+                if not _market_data_hub_job.get("last_intraday_run_at") or time.time() - _market_data_hub_job.get("last_intraday_ts", 0) >= INTRADAY_PRIORITY_SECONDS:
                     market_data_hub.refresh_intraday_priority(first_limit=120, second_limit=80)
                     _market_data_hub_job["last_intraday_ts"] = time.time()
                     _market_data_hub_job["last_intraday_run_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -942,7 +947,7 @@ def _market_data_hub_loop():
             _market_data_hub_job["message"] = f"行情数据引入中枢异常：{e}"
         finally:
             _market_data_hub_job["running"] = False
-        time.sleep(1 if _is_realtime_window(datetime.now()) else 60)
+        time.sleep(REALTIME_LOOP_SECONDS if _is_realtime_window(datetime.now()) else 60)
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
