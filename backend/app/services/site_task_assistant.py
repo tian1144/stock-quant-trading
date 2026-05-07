@@ -18,6 +18,7 @@ from typing import Optional
 from app.services import (
     ai_model_service,
     agent_workspace,
+    data_fetcher,
     news_service,
     portfolio_manager,
     risk_manager,
@@ -34,7 +35,7 @@ JOBS: dict = {}
 JOBS_LOCK = threading.Lock()
 JOBS_LOADED = False
 JOB_THREADS: set[str] = set()
-SITE_TASK_AI_WAIT_SECONDS = 25
+SITE_TASK_AI_WAIT_SECONDS = 60
 SITE_TASK_COLLECT_STEP_SECONDS = 3
 
 
@@ -504,11 +505,14 @@ def _run_site_report_task(job_id: str):
 def collect_site_context() -> dict:
     screening = (_call_with_timeout("screening", state_store.get_screening_results, []) or [])[:30]
     screening_source = "cached_screening_results"
+    sectors = _collect_sector_rankings_for_task(limit=12)
     if not screening:
         screening_source = "realtime_cache_fast_sample"
         screening = _call_with_timeout("realtime_sample", lambda: _build_realtime_screening_sample(limit=30), []) or []
+    if not screening:
+        screening_source = "sector_resource_candidate_sample"
+        screening = _build_sector_candidate_sample(sectors, limit=30)
     ai_recs = _call_with_timeout("ai_recommendations", state_store.get_ai_recommendations, {}) or {}
-    sectors = (_call_with_timeout("sectors", sector_service.get_sector_rankings, []) or [])[:12]
     sentiment = _call_with_timeout("sentiment", news_service.get_market_sentiment, {}) or {}
     stock_universe = _call_with_timeout("stock_universe", state_store.get_stock_universe, []) or []
     realtime = _call_with_timeout("realtime", state_store.get_all_realtime, {}) or {}
@@ -550,6 +554,33 @@ def collect_site_context() -> dict:
         "strategy_memory": strategy_memory,
         "system_state": system_state,
     })
+
+
+def _collect_sector_rankings_for_task(limit: int = 12) -> list:
+    sectors = _call_with_timeout("sector_rankings_cached", sector_service.get_sector_rankings, [], timeout_seconds=8) or []
+    if sectors:
+        return sectors[:limit]
+    _call_with_timeout("sector_refresh", sector_service.refresh_sector_data, [], timeout_seconds=18)
+    sectors = _call_with_timeout("sector_rankings_after_refresh", sector_service.get_sector_rankings, [], timeout_seconds=8) or []
+    if sectors:
+        return sectors[:limit]
+    rows = []
+    for sector_type in ("industry", "concept"):
+        listed = _call_with_timeout(f"sector_list_{sector_type}", lambda t=sector_type: data_fetcher.fetch_sector_list(t), [], timeout_seconds=12) or []
+        flows = _call_with_timeout(f"sector_flow_{sector_type}", lambda t=sector_type: data_fetcher.fetch_sector_money_flow(t), [], timeout_seconds=12) or []
+        flow_map = {item.get("code"): item for item in flows if item.get("code")}
+        for item in listed:
+            flow = flow_map.get(item.get("code"), {})
+            rows.append({
+                **item,
+                "main_net_inflow": _to_float(flow.get("main_net_inflow")),
+                "main_net_pct": _to_float(flow.get("main_net_pct")),
+                "super_large_inflow": _to_float(flow.get("super_large_inflow")),
+                "large_inflow": _to_float(flow.get("large_inflow")),
+                "flow_direction": "inflow" if _to_float(flow.get("main_net_inflow")) > 0 else "outflow",
+                "data_source": f"eastmoney_{sector_type}_direct",
+            })
+    return sorted(rows, key=lambda x: (_to_float(x.get("main_net_inflow")), _to_float(x.get("pct_change"))), reverse=True)[:limit]
 
 
 def _build_realtime_screening_sample(limit: int = 30) -> list:
@@ -602,6 +633,71 @@ def _build_realtime_screening_sample(limit: int = 30) -> list:
             "screening_logic": "站内AI任务快速样本，不触发全市场同步筛选。",
         })
     return sorted(rows, key=lambda x: x.get("score", 0), reverse=True)[:limit]
+
+
+def _build_sector_candidate_sample(sectors: list, limit: int = 30) -> list:
+    rows = []
+    for sector in (sectors or [])[:6]:
+        sector_name = sector.get("name") or ""
+        leader_code = str(sector.get("leader_code") or "").strip()
+        leader_name = sector.get("leader_name") or ""
+        if leader_code:
+            rows.append(_sector_candidate_row(leader_code, leader_name, sector, source="板块领涨股"))
+        detail = _call_with_timeout(
+            f"sector_detail_{sector.get('code')}",
+            lambda code=sector.get("code"): data_fetcher.fetch_sector_detail(code),
+            [],
+            timeout_seconds=10,
+        ) or []
+        for stock in detail[:4]:
+            rows.append(_sector_candidate_row(stock.get("code"), stock.get("name"), sector, stock=stock, source="板块成分股"))
+    seen = {}
+    for row in rows:
+        code = row.get("code")
+        if code and (code not in seen or row.get("score", 0) > seen[code].get("score", 0)):
+            seen[code] = row
+    return sorted(seen.values(), key=lambda x: x.get("score", 0), reverse=True)[:limit]
+
+
+def _sector_candidate_row(code: str, name: str, sector: dict, stock: Optional[dict] = None, source: str = "板块候选") -> dict:
+    stock = stock or {}
+    pct = _to_float(stock.get("pct_change"), _to_float(sector.get("leader_pct_change")))
+    amount = _to_float(stock.get("amount"))
+    volume_ratio = _to_float(stock.get("volume_ratio"))
+    sector_pct = _to_float(sector.get("pct_change"))
+    main_net = _to_float(sector.get("main_net_inflow"))
+    score = 58 + min(14, max(-8, pct * 1.5)) + min(10, max(-4, sector_pct * 1.2))
+    if main_net > 0:
+        score += min(12, main_net / 1_000_000_000 * 2)
+    if amount >= 500_000_000:
+        score += 4
+    if 1 <= volume_ratio <= 4:
+        score += 3
+    return _json_safe({
+        "code": str(code or ""),
+        "name": name or "",
+        "score": round(score, 2),
+        "final_score": round(score, 2),
+        "pct_change": pct,
+        "amount": amount,
+        "volume_ratio": volume_ratio,
+        "reason": (
+            f"{source}，所属板块 {sector.get('name', '')} 涨幅 {sector_pct:.2f}%，"
+            f"板块主力净流入 {main_net:.0f}，个股涨幅 {pct:.2f}%。"
+        ),
+        "screening_logic": {
+            "sector": {
+                "matched": [{
+                    "name": sector.get("name"),
+                    "pct_change": sector_pct,
+                    "main_net_inflow": main_net,
+                    "leader_name": sector.get("leader_name"),
+                    "leader_pct_change": sector.get("leader_pct_change"),
+                }],
+                "data_status": "sector_resource_sample",
+            }
+        },
+    })
 
 
 def _to_float(value) -> float:
@@ -666,6 +762,8 @@ def summarize_site_context(context: dict, job_payload: dict, task_type: str) -> 
         system_prompt = (
             "你是量化智能猎人的任务型AI投研助手。请根据站内上下文完成用户的投研任务，"
             f"从 investment_candidates 中自主筛出最值得重点关注的 {target_count} 只股票。"
+            "必须按用户问题直接作答，不要先套一页摘要模板；用户问板块就先回答板块，问股票就直接给股票。"
+            "如果用户问当前哪些板块涨得疯狂或资金进入较大，必须使用 sector_rankings 输出3个强势板块，写清涨幅、主力净流入、龙头股和入手条件。"
             "如果用户提到今年6月，请按2026年6月这个未来月份做计划，不能假装已经发生。"
             "必须输出：结论名单、每只股票的站内证据、6月关注逻辑、买入前置条件、止损/风控、"
             "不推荐或暂缓理由、下一步执行清单。不要泄露API密钥或本地敏感配置。"
@@ -676,6 +774,7 @@ def summarize_site_context(context: dict, job_payload: dict, task_type: str) -> 
     else:
         system_prompt = (
             "你是量化智能猎人的任务型AI助手。请根据站内上下文生成一份可执行投研任务报告，"
+            "必须按用户问题直接作答，不要套固定摘要模板；问什么答什么，并带上原因、证据和下一步方案。"
             "必须用中文，结构清晰，包含：一页摘要、市场状态、选股和AI推荐、持仓和模拟盘、"
             "新闻/板块/情绪、主要风险、下一步任务清单。不要泄露任何API密钥或本地敏感配置。"
             "不要只拒绝用户请求；如果当前没有确定答案，必须说明暂不建议直接执行，并给出可执行的替代方案、观察条件或自选方案。"
@@ -720,21 +819,43 @@ def _fallback_markdown_report(context: dict, reason: str, target_count: int = 3,
     risk = context.get("risk_status") or {}
     ai_recs = ((context.get("ai_recommendations") or {}).get("recommendations") or [])
     screening = context.get("screening_top") or []
+    sectors = context.get("sector_rankings") or []
     title = "量化智能猎人自主投研选股报告" if task_type == "investment_report" else "量化智能猎人站内AI任务报告"
-    lines = [
-        f"# {title}",
-        "",
-        f"生成时间：{context.get('generated_at')}",
-        f"说明：大模型总结未完成，已使用本地结构化摘要兜底。原因：{reason}",
-        "",
-        "## 一页摘要",
-        f"- 股票池：{context.get('universe_count', 0)} 只，实时缓存：{context.get('realtime_count', 0)} 只，K线缓存：{context.get('daily_kline_count', 0)} 只。",
-        f"- 账户总资产：{portfolio.get('total_asset', 0)}，可用资金：{portfolio.get('available_cash', 0)}，总收益率：{portfolio.get('total_profit_pct', 0)}%。",
-        f"- 当前持仓：{len(context.get('positions') or [])} 只，AI推荐购买：{len(ai_recs)} 只，智能筛选Top样本：{len(screening)} 只。",
-        f"- 风控状态：{risk.get('risk_level', risk.get('status', 'unknown'))}，熔断：{(context.get('kill_switch') or {}).get('active')}",
-        "",
-        "## AI推荐与筛选",
-    ]
+    if task_type == "investment_report":
+        lines = [
+            f"# {title}",
+            "",
+            f"生成时间：{context.get('generated_at')}",
+            f"说明：大模型总结未完成，已使用站内数据和外部行情资源兜底。原因：{reason}",
+            "",
+            "## 当前强势板块",
+        ]
+        if sectors:
+            for item in sectors[:3]:
+                lines.append(
+                    f"- {item.get('name', '')}：涨幅 {_to_float(item.get('pct_change')):.2f}%，"
+                    f"主力净流入 {_to_float(item.get('main_net_inflow')):.0f}，"
+                    f"龙头 {item.get('leader_name') or '--'} {_to_float(item.get('leader_pct_change')):.2f}%。"
+                    "入手条件：板块资金继续净流入、龙头不炸板/不破分时均线、跟风股不大面积回落。"
+                )
+        else:
+            lines.append("- 当前没有拿到有效板块榜单。建议先刷新板块资金流；系统会优先尝试东方财富板块接口，后续可继续补腾讯证券资源。")
+        lines.extend(["", "## 3只股票建议"])
+    else:
+        lines = [
+            f"# {title}",
+            "",
+            f"生成时间：{context.get('generated_at')}",
+            f"说明：大模型总结未完成，已使用本地结构化摘要兜底。原因：{reason}",
+            "",
+            "## 直接回答",
+            f"- 股票池：{context.get('universe_count', 0)} 只，实时缓存：{context.get('realtime_count', 0)} 只，K线缓存：{context.get('daily_kline_count', 0)} 只。",
+            f"- 账户总资产：{portfolio.get('total_asset', 0)}，可用资金：{portfolio.get('available_cash', 0)}，总收益率：{portfolio.get('total_profit_pct', 0)}%。",
+            f"- 当前持仓：{len(context.get('positions') or [])} 只，AI推荐购买：{len(ai_recs)} 只，智能筛选Top样本：{len(screening)} 只。",
+            f"- 风控状态：{risk.get('risk_level', risk.get('status', 'unknown'))}，熔断：{(context.get('kill_switch') or {}).get('active')}",
+            "",
+            "## AI推荐与筛选",
+        ]
     candidates = context.get("investment_candidates") or []
     if task_type == "investment_report":
         lines.append(f"本地兜底筛选出的前 {target_count} 只重点关注股票：")
