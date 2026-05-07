@@ -35,6 +35,7 @@ JOBS_LOCK = threading.Lock()
 JOBS_LOADED = False
 JOB_THREADS: set[str] = set()
 SITE_TASK_AI_WAIT_SECONDS = 25
+SITE_TASK_COLLECT_STEP_SECONDS = 3
 
 
 def _now() -> str:
@@ -70,6 +71,25 @@ def _json_safe(value):
         if isinstance(value, (list, tuple)):
             return [_json_safe(v) for v in value]
         return str(value)
+
+
+def _call_with_timeout(label: str, func, default=None, timeout_seconds: int = SITE_TASK_COLLECT_STEP_SECONDS):
+    box = {"done": False, "value": default}
+
+    def runner():
+        try:
+            box["value"] = func()
+        except Exception:
+            box["value"] = default
+        finally:
+            box["done"] = True
+
+    thread = threading.Thread(target=runner, daemon=True, name=f"site-ai-collect-{label}")
+    thread.start()
+    thread.join(timeout_seconds)
+    if not box.get("done"):
+        return default
+    return box.get("value", default)
 
 
 def _jobs_path() -> str:
@@ -482,32 +502,39 @@ def _run_site_report_task(job_id: str):
 
 
 def collect_site_context() -> dict:
-    screening = state_store.get_screening_results()[:30]
+    screening = (_call_with_timeout("screening", state_store.get_screening_results, []) or [])[:30]
+    screening_source = "cached_screening_results"
     if not screening:
-        screening = _build_realtime_screening_sample(limit=30)
-    ai_recs = state_store.get_ai_recommendations() or {}
-    sectors = []
-    try:
-        sectors = sector_service.get_sector_rankings()[:12]
-    except Exception:
-        sectors = []
-    sentiment = {}
-    try:
-        sentiment = news_service.get_market_sentiment()
-    except Exception:
-        sentiment = {}
+        screening_source = "realtime_cache_fast_sample"
+        screening = _call_with_timeout("realtime_sample", lambda: _build_realtime_screening_sample(limit=30), []) or []
+    ai_recs = _call_with_timeout("ai_recommendations", state_store.get_ai_recommendations, {}) or {}
+    sectors = (_call_with_timeout("sectors", sector_service.get_sector_rankings, []) or [])[:12]
+    sentiment = _call_with_timeout("sentiment", news_service.get_market_sentiment, {}) or {}
+    stock_universe = _call_with_timeout("stock_universe", state_store.get_stock_universe, []) or []
+    realtime = _call_with_timeout("realtime", state_store.get_all_realtime, {}) or {}
+    daily_bars = _call_with_timeout("daily_bars", state_store.get_all_daily_bars, {}) or {}
+    portfolio = _call_with_timeout("portfolio", portfolio_manager.get_portfolio_summary, {}) or {}
+    positions = (_call_with_timeout("positions", portfolio_manager.get_position_list, []) or [])[:20]
+    orders = _call_with_timeout("orders", state_store.get_orders, []) or []
+    signals = (_call_with_timeout("signals", state_store.get_signals, []) or [])[:30]
+    news = (_call_with_timeout("news", state_store.get_news, []) or [])[:20]
+    risk_status = _call_with_timeout("risk_status", risk_manager.get_risk_status, {}) or {}
+    risk_config = _call_with_timeout("risk_config", risk_manager.get_risk_config, {}) or {}
+    kill_switch = _call_with_timeout("kill_switch", get_kill_switch_status, {}) or {}
+    strategy_memory = _call_with_timeout("strategy_memory", lambda: strategy_memory_service.get_model_memory_context("deep_analysis"), "") or ""
+    system_state = _call_with_timeout("system_state", state_store.get_system_state, {}) or {}
     return _json_safe({
         "generated_at": _now(),
-        "universe_count": len(state_store.get_stock_universe()),
-        "realtime_count": len(state_store.get_all_realtime()),
-        "daily_kline_count": len(state_store.get_all_daily_bars()),
-        "portfolio": portfolio_manager.get_portfolio_summary(),
-        "positions": portfolio_manager.get_position_list()[:20],
-        "orders_tail": state_store.get_orders()[-20:],
-        "signals": state_store.get_signals()[:30],
+        "universe_count": len(stock_universe),
+        "realtime_count": len(realtime),
+        "daily_kline_count": len(daily_bars),
+        "portfolio": portfolio,
+        "positions": positions,
+        "orders_tail": orders[-20:],
+        "signals": signals,
         "screening_top": screening,
-        "screening_source": "cached_screening_results" if state_store.get_screening_results() else "realtime_cache_fast_sample",
-        "investment_candidates": _build_investment_candidates(screening),
+        "screening_source": screening_source,
+        "investment_candidates": _build_investment_candidates(screening, ai_recs=ai_recs),
         "ai_recommendations": {
             "summary": ai_recs.get("summary", {}),
             "generated_at": ai_recs.get("generated_at"),
@@ -516,12 +543,12 @@ def collect_site_context() -> dict:
         },
         "sector_rankings": sectors,
         "market_sentiment": sentiment,
-        "news": state_store.get_news()[:20],
-        "risk_status": risk_manager.get_risk_status(),
-        "risk_config": risk_manager.get_risk_config(),
-        "kill_switch": get_kill_switch_status(),
-        "strategy_memory": strategy_memory_service.get_model_memory_context("deep_analysis"),
-        "system_state": state_store.get_system_state(),
+        "news": news,
+        "risk_status": risk_status,
+        "risk_config": risk_config,
+        "kill_switch": kill_switch,
+        "strategy_memory": strategy_memory,
+        "system_state": system_state,
     })
 
 
@@ -586,9 +613,9 @@ def _to_float(value) -> float:
         return 0.0
 
 
-def _build_investment_candidates(screening: list) -> list:
+def _build_investment_candidates(screening: list, ai_recs: Optional[dict] = None) -> list:
     rows = []
-    ai_recs = state_store.get_ai_recommendations() or {}
+    ai_recs = ai_recs or {}
     for item in (ai_recs.get("recommendations") or []):
         rows.append(_candidate_row(item, source="AI推荐购买", boost=8))
     for item in (ai_recs.get("reviewed_candidates") or []):
