@@ -2211,11 +2211,18 @@
     }
     async function pollAIExecutableTask(jobId) {
       let lastText = '';
+      let pollFailures = 0;
       for (let i = 0; i < 240; i++) {
         await new Promise(resolve => setTimeout(resolve, 1500));
-        const data = await api(`/api/v1/ai/tasks/status/${encodeURIComponent(jobId)}`, { timeout: 20000 }).catch(e => ({ ok: false, error: e.message }));
+        const data = await api(`/api/v1/ai/tasks/status/${encodeURIComponent(jobId)}`, { timeout: 12000, noCache: true }).catch(e => ({ ok: false, error: e.message, transient: true }));
         if (!data.ok) {
-          const text = `任务状态获取失败：${data.error || '任务不存在或服务已重启，请重新发起任务。'}`;
+          pollFailures += 1;
+          const isMissing = !data.transient && /不存在|重启/.test(data.error || '');
+          const text = isMissing
+            ? `任务状态获取失败：${data.error || '任务不存在或服务已重启，请重新发起任务。'}`
+            : pollFailures >= 20
+              ? '任务仍在后台执行，但当前网络一直取不到进度。可以稍后用 Ctrl+Shift+A 呼出我继续查看。'
+              : `任务状态连接不稳定，正在自动重试，不会中断后台任务。(${pollFailures}/20)`;
           const last = state.aiChat.messages[state.aiChat.messages.length - 1];
           if (last && last.role === 'assistant' && (last.text || '').startsWith('任务')) {
             last.text = text;
@@ -2223,8 +2230,10 @@
             state.aiChat.messages.push({ role: 'assistant', text });
           }
           renderAIChat();
+          if (!isMissing && pollFailures < 20) continue;
           return;
         }
+        pollFailures = 0;
         const job = data.job || {};
         const text = job.status === 'done'
           ? buildAIExecutableTaskDoneText(job)
