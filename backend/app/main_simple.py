@@ -36,6 +36,7 @@ from app.services import (
     technical_analysis, ai_model_service, ai_stock_picker, market_data_hub,
     disclosure_service, strategy_memory_service, trade_review_service,
     ai_trustee_service, trading_calendar_service, auth_service, broker_service,
+    sms_code_service,
     site_task_assistant
 )
 from app.backtest.engine import BacktestEngine, create_context_ma_crossover_strategy
@@ -101,7 +102,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-PUBLIC_PATHS = {"/", "/api/v1/health", "/api/v1/auth/login"}
+
+@app.middleware("http")
+async def no_cache_middleware(request: Request, call_next):
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.endswith(".html"):
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
+PUBLIC_PATHS = {"/", "/api/v1/health", "/api/v1/auth/login", "/api/v1/auth/sms-login", "/api/v1/auth/sms/send"}
 PUBLIC_PREFIXES = ("/static/",)
 VISITOR_BLOCKED_PATHS = {
     "/api/v1/quant/settings",
@@ -1067,7 +1078,20 @@ async def health_check():
 @app.post("/api/v1/auth/login")
 async def login(payload: dict = Body(default=None)):
     payload = payload or {}
-    return auth_service.authenticate(payload.get("phone") or "", payload.get("password") or "")
+    return auth_service.authenticate(payload.get("login") or payload.get("phone") or "", payload.get("password") or "")
+
+
+@app.post("/api/v1/auth/sms/send")
+async def send_sms_code(request: Request, payload: dict = Body(default=None)):
+    payload = payload or {}
+    ip = request.client.host if request.client else ""
+    return sms_code_service.send_code(payload.get("phone") or "", payload.get("purpose") or "login", ip=ip)
+
+
+@app.post("/api/v1/auth/sms-login")
+async def sms_login(payload: dict = Body(default=None)):
+    payload = payload or {}
+    return auth_service.authenticate_by_sms(payload.get("phone") or "", payload.get("code") or "")
 
 
 @app.post("/api/v1/auth/logout")
@@ -1079,6 +1103,25 @@ async def logout(request: Request):
 async def auth_me(request: Request):
     user = _current_user(request)
     return {"ok": True, "user": user, "permissions": (user or {}).get("permissions", {})}
+
+
+@app.post("/api/v1/auth/bind-phone")
+async def auth_bind_phone(request: Request, payload: dict = Body(default=None)):
+    payload = payload or {}
+    result = auth_service.bind_phone(_current_user(request) or {}, payload.get("phone") or "", payload.get("code") or "")
+    return JSONResponse(status_code=200 if result.get("ok") else 400, content=result)
+
+
+@app.post("/api/v1/auth/password")
+async def auth_change_password(request: Request, payload: dict = Body(default=None)):
+    payload = payload or {}
+    result = auth_service.change_password(
+        _current_user(request) or {},
+        payload.get("old_password") or "",
+        payload.get("new_password") or "",
+        payload.get("code") or "",
+    )
+    return JSONResponse(status_code=200 if result.get("ok") else 400, content=result)
 
 
 @app.get("/api/v1/auth/users")

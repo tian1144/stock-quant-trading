@@ -6,6 +6,7 @@ import secrets
 import threading
 import time
 from datetime import datetime
+from app.services import sms_code_service
 
 
 BACKEND_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -46,10 +47,10 @@ DEFAULT_USERS = [
         "password": "Admin@2026!",
     },
     {
-        "phone": "19900000001",
+        "phone": "123123123",
         "name": "只读访问账号",
         "role": ROLE_VISITOR,
-        "password": "Visitor@2026!",
+        "password": "123123@！",
     },
 ]
 
@@ -104,6 +105,9 @@ def _public_user(user: dict) -> dict:
     return {
         "user_id": user.get("user_id"),
         "phone": user.get("phone"),
+        "account": user.get("account") or user.get("phone"),
+        "phone_bound": bool(user.get("phone_bound") or user.get("phone_verified")),
+        "phone_verified": bool(user.get("phone_verified")),
         "name": user.get("name") or user.get("phone"),
         "role": user.get("role") or ROLE_USER,
         "role_label": ROLE_LABELS.get(user.get("role"), "普通账号"),
@@ -135,7 +139,20 @@ def permissions_for_role(role: str) -> dict:
 def init_auth_store():
     with _lock:
         users = _read_json(USERS_PATH, {"users": []})
+        for user in users.get("users", []):
+            if user.get("role") == ROLE_VISITOR and user.get("phone") != "123123123":
+                user["phone"] = "123123123"
+                user["name"] = "只读访问账号"
+                user["password_hash"] = _hash_password("123123@！")
+                user["updated_at"] = _now()
         existing = {u.get("phone"): u for u in users.get("users", [])}
+        for seed in DEFAULT_USERS:
+            row = existing.get(seed["phone"])
+            if row:
+                row["account"] = row.get("account") or seed["phone"]
+                row["phone_bound"] = True
+                row["phone_verified"] = True
+                row["updated_at"] = row.get("updated_at") or _now()
         changed = False
         for seed in DEFAULT_USERS:
             if seed["phone"] in existing:
@@ -144,10 +161,13 @@ def init_auth_store():
             users.setdefault("users", []).append({
                 "user_id": secrets.token_hex(8),
                 "phone": seed["phone"],
+                "account": seed.get("account") or seed["phone"],
                 "name": seed["name"],
                 "role": seed["role"],
                 "status": "active",
                 "password_hash": password_hash,
+                "phone_bound": True,
+                "phone_verified": True,
                 "invited_by": None,
                 "created_by": "system",
                 "commission_rate_pct": 0.0,
@@ -175,12 +195,20 @@ def list_users(actor: dict) -> dict:
     return {"ok": True, "users": [_public_user(u) for u in users], "roles": ROLE_LABELS}
 
 
-def authenticate(phone: str, password: str) -> dict:
-    init_auth_store()
-    users_doc = _read_json(USERS_PATH, {"users": []})
-    user = next((u for u in users_doc.get("users", []) if u.get("phone") == str(phone).strip()), None)
-    if not user or user.get("status") != "active" or not _verify_password(password or "", user.get("password_hash") or {}):
-        return {"ok": False, "error": "手机号或密码错误，或账号已停用。"}
+def _find_user_by_login(users: list, login_id: str) -> dict | None:
+    login_id = str(login_id or "").strip()
+    return next(
+        (
+            u for u in users
+            if u.get("phone") == login_id
+            or u.get("account") == login_id
+            or u.get("name") == login_id
+        ),
+        None,
+    )
+
+
+def _issue_session(user: dict) -> dict:
     token = secrets.token_urlsafe(32)
     session = {
         "token": token,
@@ -196,6 +224,27 @@ def authenticate(phone: str, password: str) -> dict:
         sessions["sessions"].append(session)
         _write_json(SESSIONS_PATH, sessions)
     return {"ok": True, "token": token, "user": _public_user(user)}
+
+
+def authenticate(phone: str, password: str) -> dict:
+    init_auth_store()
+    users_doc = _read_json(USERS_PATH, {"users": []})
+    user = _find_user_by_login(users_doc.get("users", []), phone)
+    if not user or user.get("status") != "active" or not _verify_password(password or "", user.get("password_hash") or {}):
+        return {"ok": False, "error": "手机号或密码错误，或账号已停用。"}
+    return _issue_session(user)
+
+
+def authenticate_by_sms(phone: str, code: str) -> dict:
+    init_auth_store()
+    users_doc = _read_json(USERS_PATH, {"users": []})
+    user = next((u for u in users_doc.get("users", []) if u.get("phone") == str(phone).strip() and u.get("phone_verified")), None)
+    if not user or user.get("status") != "active":
+        return {"ok": False, "error": "该手机号未绑定可登录账号。"}
+    verified = sms_code_service.verify_code(phone, "login", code)
+    if not verified.get("ok"):
+        return verified
+    return _issue_session(user)
 
 
 def get_user_by_token(token: str) -> dict | None:
@@ -242,10 +291,13 @@ def create_user(actor: dict, payload: dict) -> dict:
         user = {
             "user_id": secrets.token_hex(8),
             "phone": phone,
+            "account": (payload or {}).get("account") or phone,
             "name": (payload or {}).get("name") or phone,
             "role": role,
             "status": "active",
             "password_hash": _hash_password(password),
+            "phone_bound": True,
+            "phone_verified": True,
             "invited_by": actor.get("user_id"),
             "created_by": actor.get("phone"),
             "commission_rate_pct": float((payload or {}).get("commission_rate_pct") or 0),
@@ -261,6 +313,47 @@ def create_user(actor: dict, payload: dict) -> dict:
         users_doc["updated_at"] = _now()
         _write_json(USERS_PATH, users_doc)
     return {"ok": True, "user": _public_user(user)}
+
+
+def bind_phone(user: dict, phone: str, code: str) -> dict:
+    verified = sms_code_service.verify_code(phone, "bind_phone", code)
+    if not verified.get("ok"):
+        return verified
+    with _lock:
+        users_doc = _read_json(USERS_PATH, {"users": []})
+        if any(u.get("phone") == phone and u.get("user_id") != user.get("user_id") for u in users_doc.get("users", [])):
+            return {"ok": False, "error": "该手机号已绑定其他账号。"}
+        row = next((u for u in users_doc.get("users", []) if u.get("user_id") == user.get("user_id")), None)
+        if not row:
+            return {"ok": False, "error": "账号不存在。"}
+        row["phone"] = phone
+        row["phone_bound"] = True
+        row["phone_verified"] = True
+        row["updated_at"] = _now()
+        users_doc["updated_at"] = _now()
+        _write_json(USERS_PATH, users_doc)
+    return {"ok": True, "user": _public_user(row), "message": "手机号已绑定。"}
+
+
+def change_password(user: dict, old_password: str, new_password: str, sms_code: str = "") -> dict:
+    if len(new_password or "") < 8:
+        return {"ok": False, "error": "新密码至少 8 位。"}
+    with _lock:
+        users_doc = _read_json(USERS_PATH, {"users": []})
+        row = next((u for u in users_doc.get("users", []) if u.get("user_id") == user.get("user_id")), None)
+        if not row:
+            return {"ok": False, "error": "账号不存在。"}
+        if row.get("phone_verified"):
+            checked = sms_code_service.verify_code(row.get("phone") or "", "change_password", sms_code)
+            if not checked.get("ok"):
+                return checked
+        elif not _verify_password(old_password or "", row.get("password_hash") or {}):
+            return {"ok": False, "error": "旧密码错误。"}
+        row["password_hash"] = _hash_password(new_password)
+        row["updated_at"] = _now()
+        users_doc["updated_at"] = _now()
+        _write_json(USERS_PATH, users_doc)
+    return {"ok": True, "message": "密码已更新，请使用新密码登录。"}
 
 
 def update_user_role(actor: dict, phone: str, role: str) -> dict:
