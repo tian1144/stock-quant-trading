@@ -1,6 +1,7 @@
 ﻿from fastapi import FastAPI, Query, Body
+from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from contextlib import asynccontextmanager
 import logging
 import os
@@ -34,7 +35,8 @@ from app.services import (
     news_service, data_fetcher, sector_service, agent_workspace,
     technical_analysis, ai_model_service, ai_stock_picker, market_data_hub,
     disclosure_service, strategy_memory_service, trade_review_service,
-    ai_trustee_service, trading_calendar_service
+    ai_trustee_service, trading_calendar_service, auth_service, broker_service,
+    site_task_assistant
 )
 from app.backtest.engine import BacktestEngine, create_context_ma_crossover_strategy
 from app.backtest.context import build_context_provider
@@ -98,6 +100,81 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+PUBLIC_PATHS = {"/", "/api/v1/health", "/api/v1/auth/login"}
+PUBLIC_PREFIXES = ("/static/",)
+VISITOR_BLOCKED_PATHS = {
+    "/api/v1/quant/settings",
+    "/api/v1/quant/portfolio/buy",
+    "/api/v1/quant/portfolio/sell",
+    "/api/v1/quant/portfolio/reset",
+    "/api/v1/quant/ai-trustee/start",
+    "/api/v1/quant/ai-trustee/stop",
+    "/api/v1/quant/ai-trustee/review",
+    "/api/v1/quant/system/auto-trade",
+    "/api/v1/quant/risk/config",
+    "/api/v1/ai/strategy-memory/notes",
+    "/api/v1/ai/models/detect",
+    "/api/v1/ai/risk-verifier/models/detect",
+    "/api/v1/ai/config",
+    "/api/v1/ai/risk-verifier/config",
+    "/api/v1/ai/models/select",
+    "/api/v1/ai/risk-verifier/models/select",
+    "/api/v1/ai/policy",
+    "/api/v1/ai/config/clear",
+    "/api/v1/ai/trade-review/verify",
+    "/api/v1/quant/kill-switch/activate",
+    "/api/v1/quant/kill-switch/deactivate",
+    "/api/v1/brokers/connect",
+}
+SUB_ADMIN_REQUIRED_PATHS = {
+    "/api/v1/ai/models/detect",
+    "/api/v1/ai/risk-verifier/models/detect",
+    "/api/v1/ai/config",
+    "/api/v1/ai/risk-verifier/config",
+    "/api/v1/ai/models/select",
+    "/api/v1/ai/risk-verifier/models/select",
+    "/api/v1/ai/policy",
+    "/api/v1/ai/config/clear",
+    "/api/v1/auth/users",
+}
+
+
+def _auth_token_from_request(request: Request) -> str:
+    auth = request.headers.get("authorization") or ""
+    if auth.lower().startswith("bearer "):
+        return auth.split(" ", 1)[1].strip()
+    return request.cookies.get("lh_token") or ""
+
+
+def _current_user(request: Request) -> dict | None:
+    return getattr(request.state, "user", None)
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    path = request.url.path
+    if request.method == "OPTIONS":
+        return await call_next(request)
+    if path in PUBLIC_PATHS or any(path.startswith(prefix) for prefix in PUBLIC_PREFIXES):
+        return await call_next(request)
+    user = auth_service.get_user_by_token(_auth_token_from_request(request))
+    if not user:
+        return JSONResponse(status_code=401, content={"ok": False, "error": "请先登录后访问本站。"})
+    request.state.user = user
+    if request.method not in ("GET", "HEAD", "OPTIONS"):
+        if user.get("role") == auth_service.ROLE_VISITOR and (
+            path in VISITOR_BLOCKED_PATHS
+            or path.startswith("/api/v1/auth/users")
+            or path.startswith("/api/v1/brokers/")
+        ):
+            return JSONResponse(
+                status_code=403,
+                content={"ok": False, "error": "访问账号为只读参观权限，不能修改重要参数、密钥、交易或实盘接入。"},
+            )
+        if path in SUB_ADMIN_REQUIRED_PATHS and auth_service.ROLE_RANK.get(user.get("role"), 0) < auth_service.ROLE_RANK[auth_service.ROLE_SUB_ADMIN]:
+            return JSONResponse(status_code=403, content={"ok": False, "error": "该操作需要次管理或最高管理权限。"})
+    return await call_next(request)
 
 _stock_cache = {"stocks": [], "updated_at": 0}
 _stock_detail_cache = {}
@@ -983,6 +1060,74 @@ async def health_check():
         "hostname": socket.gethostname(),
         "code_mtime": datetime.fromtimestamp(os.path.getmtime(__file__)).strftime("%Y-%m-%d %H:%M:%S"),
     }
+
+
+# ==================== 账号权限与邀请制 API ====================
+
+@app.post("/api/v1/auth/login")
+async def login(payload: dict = Body(default=None)):
+    payload = payload or {}
+    return auth_service.authenticate(payload.get("phone") or "", payload.get("password") or "")
+
+
+@app.post("/api/v1/auth/logout")
+async def logout(request: Request):
+    return auth_service.logout(_auth_token_from_request(request))
+
+
+@app.get("/api/v1/auth/me")
+async def auth_me(request: Request):
+    user = _current_user(request)
+    return {"ok": True, "user": user, "permissions": (user or {}).get("permissions", {})}
+
+
+@app.get("/api/v1/auth/users")
+async def auth_users(request: Request):
+    return auth_service.list_users(_current_user(request) or {})
+
+
+@app.post("/api/v1/auth/users")
+async def auth_create_user(request: Request, payload: dict = Body(default=None)):
+    result = auth_service.create_user(_current_user(request) or {}, payload or {})
+    return JSONResponse(status_code=200 if result.get("ok") else 400, content=result)
+
+
+@app.post("/api/v1/auth/users/{phone}/role")
+async def auth_update_user_role(request: Request, phone: str, payload: dict = Body(default=None)):
+    payload = payload or {}
+    result = auth_service.update_user_role(_current_user(request) or {}, phone, payload.get("role") or "")
+    return JSONResponse(status_code=200 if result.get("ok") else 400, content=result)
+
+
+@app.post("/api/v1/auth/users/{phone}/commission")
+async def auth_update_user_commission(request: Request, phone: str, payload: dict = Body(default=None)):
+    payload = payload or {}
+    result = auth_service.update_commission(_current_user(request) or {}, phone, payload.get("commission_rate_pct") or 0)
+    return JSONResponse(status_code=200 if result.get("ok") else 400, content=result)
+
+
+# ==================== 实盘券商接入预留 API ====================
+
+@app.get("/api/v1/brokers")
+async def brokers():
+    return broker_service.list_supported_brokers()
+
+
+@app.get("/api/v1/brokers/accounts")
+async def broker_accounts(request: Request):
+    return broker_service.list_accounts(_current_user(request) or {})
+
+
+@app.post("/api/v1/brokers/connect")
+async def broker_connect(request: Request, payload: dict = Body(default=None)):
+    result = broker_service.connect_account(_current_user(request) or {}, payload or {})
+    return JSONResponse(status_code=200 if result.get("ok") else 400, content=result)
+
+
+@app.post("/api/v1/brokers/accounts/{account_id}/sync")
+async def broker_sync(request: Request, account_id: str):
+    result = broker_service.sync_account(_current_user(request) or {}, account_id)
+    return JSONResponse(status_code=200 if result.get("ok") else 400, content=result)
 
 @app.get("/api/v1/stocks")
 async def get_stocks(
@@ -1939,6 +2084,27 @@ async def ai_chat(payload: dict = Body(...)):
     if not message:
         return {"ok": False, "answer": "请先输入问题。", "ai_meta": {"used_ai": False}}
 
+    task_intent = site_task_assistant.classify_task(message)
+    if task_intent.get("can_execute"):
+        started = site_task_assistant.start_task(message, payload)
+        if started.get("ok"):
+            job = started.get("job") or {}
+            return {
+                "ok": True,
+                "mode": "task",
+                "answer": f"已启动任务：{task_intent.get('title', '站内AI任务')}。我会收集站内信息、生成报告产物，并按需处理邮件发送。任务号：{job.get('job_id')}",
+                "task": job,
+                "intent": task_intent,
+                "ai_meta": {"used_ai": False, "task_started": True},
+            }
+        return {
+            "ok": False,
+            "mode": "task",
+            "answer": started.get("error", "任务启动失败。"),
+            "intent": task_intent,
+            "ai_meta": {"used_ai": False, "task_started": False},
+        }
+
     current_stock = payload.get("current_stock") if isinstance(payload.get("current_stock"), dict) else None
     strategy = state_store.get_user_settings().get("trading_style", "short")
     matched_stocks = _site_ai_match_stocks(message, current_stock=current_stock)
@@ -1989,6 +2155,30 @@ async def ai_chat(payload: dict = Body(...)):
         payload={"used_ai": meta.get("used_ai"), "model": meta.get("model"), "page": payload.get("page")},
     )
     return {"ok": meta.get("ok", False), "answer": answer, "ai_meta": meta}
+
+
+@app.post("/api/v1/ai/tasks/start")
+async def start_site_ai_task(payload: dict = Body(default=None)):
+    payload = payload or {}
+    message = str(payload.get("message", "")).strip()
+    if not message:
+        return {"ok": False, "error": "请先输入任务指令。"}
+    return site_task_assistant.start_task(message, payload)
+
+
+@app.get("/api/v1/ai/tasks/status/{job_id}")
+async def get_site_ai_task_status(job_id: str):
+    return site_task_assistant.get_job(job_id)
+
+
+@app.get("/api/v1/ai/tasks/artifact/{job_id}/{filename}")
+async def get_site_ai_task_artifact(job_id: str, filename: str):
+    safe_filename = re.sub(r"[^A-Za-z0-9_.-]+", "_", filename or "")
+    path = os.path.join(site_task_assistant.ARTIFACT_DIR, re.sub(r"[^A-Za-z0-9_.-]+", "_", job_id), safe_filename)
+    if not os.path.exists(path):
+        return {"ok": False, "error": "产物不存在或任务尚未完成。"}
+    media_type = "application/pdf" if safe_filename.lower().endswith(".pdf") else "text/plain"
+    return FileResponse(path, media_type=media_type, filename=safe_filename)
 
 
 @app.get("/api/v1/ai/trade-review/candidates")

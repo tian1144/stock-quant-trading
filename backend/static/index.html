@@ -621,6 +621,51 @@
       transform: translate(12px, 12px);
       pointer-events: none;
     }
+    .login-gate {
+      position: fixed;
+      inset: 0;
+      z-index: 220;
+      display: none;
+      place-items: center;
+      padding: 20px;
+      background: rgba(245, 246, 249, .92);
+      backdrop-filter: blur(14px);
+    }
+    .login-gate.open { display: grid; }
+    .login-card {
+      width: min(440px, 100%);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fff;
+      box-shadow: var(--shadow);
+      padding: 22px;
+    }
+    .login-title { margin: 0; font-size: 22px; font-weight: 900; }
+    .login-sub { margin: 8px 0 18px; color: var(--muted); line-height: 1.6; font-size: 13px; }
+    .login-actions { display: flex; gap: 10px; align-items: center; margin-top: 14px; }
+    .auth-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 36px;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      color: var(--muted);
+      font-weight: 800;
+      font-size: 12px;
+    }
+    .readonly-banner {
+      margin-bottom: 14px;
+      padding: 12px 14px;
+      border: 1px solid #fed7aa;
+      border-radius: 12px;
+      background: #fff7ed;
+      color: #9a3412;
+      font-weight: 800;
+      line-height: 1.6;
+    }
     .job-progress { display: grid; gap: 12px; }
     .progress-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
     .progress-title { font-weight: 900; }
@@ -757,10 +802,12 @@
     }
     .ai-chat-launch {
       position: fixed; right: 18px; bottom: 78px; z-index: 95;
-      width: 46px; height: 46px; border-radius: 50%; border: 1px solid rgba(215,25,32,.25);
-      background: linear-gradient(135deg, #d71920, #ff6b6b); color: #fff; font-weight: 900;
+      width: 34px; height: 34px; border-radius: 50%; border: 1px solid rgba(215,25,32,.25);
+      background: #d71920; color: #fff; font-weight: 900; font-size: 12px;
       box-shadow: 0 14px 30px rgba(215,25,32,.22); cursor: pointer;
+      touch-action: none;
     }
+    .ai-chat-launch.hidden-dock { opacity: .18; transform: scale(.82); }
     .ai-chat { position: fixed; right: 18px; bottom: 132px; z-index: 140; width: min(460px, calc(100vw - 28px)); min-width: 320px; min-height: 300px; display: none; resize: both; overflow: auto; }
     .ai-chat.open { display: block; }
     .ai-chat-card { height: 100%; display: flex; flex-direction: column; background: #fff; border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); overflow: hidden; }
@@ -1272,13 +1319,15 @@
           <button class="search-clear" id="searchClear" type="button" onclick="clearTopSearch(event)">×</button>
           <div class="suggestions" id="suggestions"></div>
         </label>
-        <div class="actions">
-          <span class="status"><i class="dot" id="serviceDot"></i><span id="serviceText">连接中</span></span>
-          <button class="btn blue" onclick="switchSection('strategy')" id="strategyBtn">策略</button>
+          <div class="actions">
+            <span class="status"><i class="dot" id="serviceDot"></i><span id="serviceText">连接中</span></span>
+            <span class="auth-pill" id="authPill">未登录</span>
+            <button class="btn blue" onclick="switchSection('strategy')" id="strategyBtn">策略</button>
           <button class="btn primary" onclick="runScreening()">运行选股</button>
           <button class="btn" onclick="loadSignals()">刷新信号</button>
-          <button class="btn danger" id="killBtn" onclick="toggleKillSwitch()">熔断</button>
-        </div>
+            <button class="btn danger" id="killBtn" onclick="toggleKillSwitch()">熔断</button>
+            <button class="btn" onclick="logout()">退出</button>
+          </div>
       </div>
 
       <section class="section active" id="dashboard"></section>
@@ -1296,6 +1345,7 @@
       <section class="section" id="risk"></section>
       <section class="section" id="datahub"></section>
       <section class="section" id="ai"></section>
+      <section class="section" id="accounts"></section>
       <section class="section" id="tradeReview"></section>
       <section class="section" id="agents"></section>
       <section class="section" id="roadmap"></section>
@@ -1312,7 +1362,7 @@
       <div class="modal-body" id="modalBody"></div>
     </div>
   </div>
-  <button class="ai-chat-launch" onclick="toggleAIChat()" title="Ctrl+Shift+A">AI</button>
+  <button class="ai-chat-launch" id="aiChatLaunch" onclick="handleAIChatLaunchClick(event)" title="Ctrl+Shift+A">AI</button>
   <div class="ai-chat" id="aiChat">
     <div class="ai-chat-card">
       <div class="ai-chat-head">
@@ -1349,6 +1399,18 @@
     </div>
   </div>
   <div class="toast" id="toast"></div>
+  <div class="login-gate" id="loginGate">
+    <div class="login-card">
+      <h2 class="login-title">账号登录</h2>
+      <p class="login-sub">本站实行邀请制，不能自行注册。请使用管理账号创建的手机号和密码登录；访问账号只能参观网站，不能修改 AI 密钥、风控、交易和实盘接入。</p>
+      <div class="field wide"><label>手机号</label><input id="loginPhone" autocomplete="username" placeholder="请输入手机号"></div>
+      <div class="field wide"><label>密码</label><input id="loginPassword" type="password" autocomplete="current-password" placeholder="请输入密码"></div>
+      <div class="login-actions">
+        <button class="btn primary" onclick="login()">登录</button>
+        <span class="note" id="loginHint">默认已内置两个最高管理账号和一个访问账号。</span>
+      </div>
+    </div>
+  </div>
 
   <script>
     const sections = [
@@ -1366,6 +1428,7 @@
       ['news', '新闻', '事件流'],
       ['risk', '风控', '黑盒复核'],
       ['ai', '智能模型', '模型配置'],
+      ['accounts', '账号', '邀请权限'],
       ['tradeReview', '交割单', '复盘校验'],
       ['agents', '智能体', '工作台'],
       ['roadmap', '预留', '待接入']
@@ -1375,7 +1438,7 @@
       { id: 'market_group', title: '行情投研', sub: '行情研究', sections: [['market', '行情', '股票搜索'], ['sectors', '板块', '资金归因'], ['watchlist', '自选', '观察池'], ['research', '研究', '个股报告']] },
       { id: 'strategy_group', title: '策略交易', sub: '策略模拟', sections: [['strategy', '策略', '模式切换'], ['strategyWatchlist', '自选', '策略股票'], ['screening', '选股', '候选排序'], ['signals', '信号', '交易建议'], ['portfolio', '持仓', '模拟盘'], ['lab', '回测', '实验室']] },
       { id: 'risk_group', title: '消息风控', sub: '新闻风控', sections: [['news', '新闻', '事件流'], ['risk', '风控', '黑盒复核']] },
-      { id: 'system_group', title: '系统配置', sub: '模型智能体', sections: [['datahub', '数据', '覆盖率'], ['ai', '智能模型', '模型密钥'], ['tradeReview', '交割单', '复盘校验'], ['agents', '智能体', '工作台']] },
+      { id: 'system_group', title: '系统配置', sub: '模型智能体', sections: [['datahub', '数据', '覆盖率'], ['ai', '智能模型', '模型密钥'], ['accounts', '账号', '邀请权限'], ['tradeReview', '交割单', '复盘校验'], ['agents', '智能体', '工作台']] },
       { id: 'future_group', title: '后续建设', sub: '待接入', sections: [['roadmap', '预留', '待接入']] }
     ];
 
@@ -1425,6 +1488,8 @@
       sectorDetailCache: {},
       marketTab: 'all',
       ai: { providers: [], config: {}, detectResult: null },
+      auth: { user: null, permissions: {}, users: [], roles: {} },
+      brokers: { brokers: [], accounts: [] },
       agents: { agents: [], pipeline: [], logs: [] },
       strategy: 'short',
       aiPickScope: localStorage.getItem('quant_ai_pick_scope') || 'focus',
@@ -1433,6 +1498,8 @@
       pointer: { x: window.innerWidth - 220, y: window.innerHeight - 120 },
       aiChatLayout: null,
       aiChatDragging: null,
+      aiChatLaunchLayout: null,
+      aiChatLaunchDragging: null,
       trusteeCalendar: { target: '', year: new Date().getFullYear(), month: new Date().getMonth() + 1, selected: '', data: null },
       screeningJob: null,
       loadedSections: {},
@@ -1443,6 +1510,7 @@
     };
 
     const API_BASE = location.protocol === 'file:' ? 'http://localhost:8000' : '';
+    let AUTH_TOKEN = localStorage.getItem('lh_auth_token') || '';
     const STRATEGIES = {
       short: {
         name: '短线猎人',
@@ -1649,14 +1717,18 @@
         ? `${url}${url.includes('?') ? '&' : '?'}_=${Date.now()}`
         : url;
       try {
-        const res = await fetch(API_BASE + requestUrl, {
-          headers: { 'Content-Type': 'application/json', ...(noCache ? { 'Cache-Control': 'no-cache' } : {}) },
-          cache: noCache ? 'no-store' : 'default',
-          signal: controller.signal,
-          ...fetchOptions
-        });
-        if (!res.ok) throw new Error(`${res.status} ${url}`);
-        return await res.json();
+          const res = await fetch(API_BASE + requestUrl, {
+            headers: { 'Content-Type': 'application/json', ...(AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {}), ...(noCache ? { 'Cache-Control': 'no-cache' } : {}) },
+            cache: noCache ? 'no-store' : 'default',
+            signal: controller.signal,
+            ...fetchOptions
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            if (res.status === 401) showLoginGate();
+            throw new Error(data.error || data.message || `${res.status} ${url}`);
+          }
+          return data;
       } catch (err) {
         if (err && (err.name === 'AbortError' || /aborted|abort|signal/i.test(err.message || ''))) {
           throw new Error(`请求超时或被浏览器中断，请稍后重试；如果是全市场AI选股，建议先用关注股票选股验证模型连通性。`);
@@ -1725,6 +1797,64 @@
           toast(finalText);
         }
       };
+    }
+    function showLoginGate() {
+      document.getElementById('loginGate')?.classList.add('open');
+    }
+    function hideLoginGate() {
+      document.getElementById('loginGate')?.classList.remove('open');
+    }
+    function isReadonly() {
+      return !!((state.auth.permissions || {}).readonly || (state.auth.user || {}).role === 'visitor');
+    }
+    function canManageAccounts() {
+      return !!(state.auth.permissions || {}).can_manage_accounts;
+    }
+    function canModifySensitive() {
+      return !!(state.auth.permissions || {}).can_modify_sensitive;
+    }
+    function readonlyBanner() {
+      return isReadonly() ? '<div class="readonly-banner">当前为访问账号，只能参观网站。AI API Key、风控参数、交易、托管、实盘券商接入和账号管理均禁止修改。</div>' : '';
+    }
+    async function login() {
+      const phone = document.getElementById('loginPhone')?.value.trim() || '';
+      const password = document.getElementById('loginPassword')?.value || '';
+      const res = await fetch(API_BASE + '/api/v1/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ phone, password })
+      }).then(r => r.json()).catch(e => ({ ok: false, error: e.message }));
+      if (!res.ok) return toast(res.error || '登录失败');
+      AUTH_TOKEN = res.token || '';
+      localStorage.setItem('lh_auth_token', AUTH_TOKEN);
+      state.auth.user = res.user || null;
+      state.auth.permissions = (res.user || {}).permissions || {};
+      hideLoginGate();
+      toast(`已登录：${(state.auth.user || {}).name || phone}`);
+      await refreshAuth(false);
+      initNav();
+      refreshAll();
+    }
+    async function logout() {
+      await api('/api/v1/auth/logout', { method: 'POST' }).catch(() => ({}));
+      AUTH_TOKEN = '';
+      localStorage.removeItem('lh_auth_token');
+      state.auth = { user: null, permissions: {}, users: [], roles: {} };
+      showLoginGate();
+    }
+    async function refreshAuth(showGate = true) {
+      if (!AUTH_TOKEN) {
+        if (showGate) showLoginGate();
+        return false;
+      }
+      const res = await api('/api/v1/auth/me', { timeout: 7000 }).catch(() => null);
+      if (!res || !res.ok) {
+        if (showGate) showLoginGate();
+        return false;
+      }
+      state.auth.user = res.user || null;
+      state.auth.permissions = res.permissions || (res.user || {}).permissions || {};
+      return true;
     }
     function applyNewsPayload(payload = {}, preserveOnEmpty = false) {
       const incoming = Array.isArray(payload.news) ? payload.news : [];
@@ -1831,14 +1961,101 @@
         applyAIChatLayout();
       });
     }
+    function clampAIChatLaunchLayout(layout) {
+      const margin = 6;
+      const size = 34;
+      const maxLeft = Math.max(margin, window.innerWidth - size - margin);
+      const maxTop = Math.max(margin, window.innerHeight - size - margin);
+      return {
+        left: Math.min(Math.max(Number(layout?.left ?? window.innerWidth - 52), margin), maxLeft),
+        top: Math.min(Math.max(Number(layout?.top ?? window.innerHeight - 112), margin), maxTop),
+        hidden: !!layout?.hidden
+      };
+    }
+    function loadAIChatLaunchLayout() {
+      try {
+        const saved = JSON.parse(localStorage.getItem('quant_ai_chat_launch_layout') || 'null');
+        state.aiChatLaunchLayout = clampAIChatLaunchLayout(saved || {});
+      } catch {
+        state.aiChatLaunchLayout = clampAIChatLaunchLayout({});
+      }
+    }
+    function applyAIChatLaunchLayout() {
+      const btn = document.getElementById('aiChatLaunch');
+      if (!btn) return;
+      const layout = clampAIChatLaunchLayout(state.aiChatLaunchLayout || {});
+      state.aiChatLaunchLayout = layout;
+      btn.style.left = `${layout.left}px`;
+      btn.style.top = `${layout.top}px`;
+      btn.style.right = 'auto';
+      btn.style.bottom = 'auto';
+      btn.classList.toggle('hidden-dock', layout.hidden);
+    }
+    function saveAIChatLaunchLayout() {
+      state.aiChatLaunchLayout = clampAIChatLaunchLayout(state.aiChatLaunchLayout || {});
+      localStorage.setItem('quant_ai_chat_launch_layout', JSON.stringify(state.aiChatLaunchLayout));
+      applyAIChatLaunchLayout();
+    }
+    function handleAIChatLaunchClick(event) {
+      if (state.aiChatLaunchDragging?.moved) {
+        event.preventDefault();
+        return;
+      }
+      const layout = state.aiChatLaunchLayout || {};
+      if (layout.hidden) {
+        state.aiChatLaunchLayout = { ...layout, hidden: false };
+        saveAIChatLaunchLayout();
+      }
+      toggleAIChat();
+    }
+    function showAIChatLaunch() {
+      state.aiChatLaunchLayout = { ...(state.aiChatLaunchLayout || {}), hidden: false };
+      saveAIChatLaunchLayout();
+    }
+    function initAIChatLaunchDrag() {
+      const btn = document.getElementById('aiChatLaunch');
+      if (!btn) return;
+      btn.addEventListener('pointerdown', (event) => {
+        const rect = btn.getBoundingClientRect();
+        state.aiChatLaunchDragging = { dx: event.clientX - rect.left, dy: event.clientY - rect.top, moved: false };
+        btn.setPointerCapture?.(event.pointerId);
+      });
+      btn.addEventListener('pointermove', (event) => {
+        const drag = state.aiChatLaunchDragging;
+        if (!drag) return;
+        const next = clampAIChatLaunchLayout({
+          left: event.clientX - drag.dx,
+          top: event.clientY - drag.dy,
+          hidden: false
+        });
+        if (Math.abs(next.left - (state.aiChatLaunchLayout?.left || 0)) > 2 || Math.abs(next.top - (state.aiChatLaunchLayout?.top || 0)) > 2) {
+          drag.moved = true;
+        }
+        const nearEdge = next.left < 12 || next.top < 12 || next.left > window.innerWidth - 46 || next.top > window.innerHeight - 46;
+        state.aiChatLaunchLayout = { ...next, hidden: nearEdge };
+        applyAIChatLaunchLayout();
+      });
+      btn.addEventListener('pointerup', () => {
+        if (!state.aiChatLaunchDragging) return;
+        const moved = !!state.aiChatLaunchDragging.moved;
+        state.aiChatLaunchDragging = moved ? { moved: true } : null;
+        saveAIChatLaunchLayout();
+        setTimeout(() => { if (state.aiChatLaunchDragging?.moved) state.aiChatLaunchDragging = null; }, 0);
+      });
+      window.addEventListener('resize', () => {
+        state.aiChatLaunchLayout = clampAIChatLaunchLayout(state.aiChatLaunchLayout || {});
+        saveAIChatLaunchLayout();
+      });
+    }
     function toggleAIChat(force) {
       const panel = document.getElementById('aiChat');
       const shouldOpen = force === undefined ? !panel.classList.contains('open') : !!force;
       panel.classList.toggle('open', shouldOpen);
       if (shouldOpen) {
+        showAIChatLaunch();
         applyAIChatLayout();
         if (!state.aiChat.messages.length) {
-          state.aiChat.messages.push({ role: 'assistant', text: '我在。可以问我当前页面、股票、选股逻辑、风控、新闻、回测、模型配置，也可以直接闲聊。' });
+          state.aiChat.messages.push({ role: 'assistant', text: '我在。可以直接让我执行站内任务，比如“总结今年6月最值得投资的三支股票并发送至 xxx@xxx.com”，我会自己收集站内信息、生成报告并按配置发送。' });
           renderAIChat();
         }
         setTimeout(() => document.getElementById('aiChatInput')?.focus(), 0);
@@ -1874,18 +2091,60 @@
       state.aiChat.messages.pop();
       state.aiChat.messages.push({ role: 'assistant', text: res.answer || '没有拿到有效回复。' });
       renderAIChat();
+      if (res.mode === 'task' && res.task?.job_id) {
+        pollAIExecutableTask(res.task.job_id);
+      }
+    }
+    async function pollAIExecutableTask(jobId) {
+      let lastText = '';
+      for (let i = 0; i < 240; i++) {
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        const data = await api(`/api/v1/ai/tasks/status/${encodeURIComponent(jobId)}`, { timeout: 20000 }).catch(e => ({ ok: false, error: e.message }));
+        const job = data.job || {};
+        const text = job.status === 'done'
+          ? buildAIExecutableTaskDoneText(job)
+          : job.status === 'failed'
+            ? `任务失败：${job.error || job.message || '未知错误'}`
+            : `任务执行中：${job.message || job.stage || '处理中'} (${job.progress?.current || 0}/${job.progress?.total || 5})`;
+        if (text !== lastText) {
+          const last = state.aiChat.messages[state.aiChat.messages.length - 1];
+          if (last && last.role === 'assistant' && (last.text || '').startsWith('任务')) {
+            last.text = text;
+          } else {
+            state.aiChat.messages.push({ role: 'assistant', text });
+          }
+          lastText = text;
+          renderAIChat();
+        }
+        if (job.status === 'done' || job.status === 'failed') return;
+      }
+      state.aiChat.messages.push({ role: 'assistant', text: '任务还在后台执行，可以稍后用 Ctrl+Shift+A 呼出我继续查看。' });
+      renderAIChat();
+    }
+    function buildAIExecutableTaskDoneText(job) {
+      const result = job.result || {};
+      const email = result.email || {};
+      const lines = [
+        '任务完成。',
+        result.summary ? `摘要：${result.summary}` : '',
+        result.pdf_url ? `PDF下载：${location.origin}${result.pdf_url}` : '',
+        email.requested ? `邮件：${email.message || (email.sent ? '已发送' : '未发送')}` : ''
+      ].filter(Boolean);
+      return lines.join('\n');
     }
 
     function initNav() {
-      const nav = document.getElementById('nav');
-      nav.innerHTML = NAV_GROUPS.map(group => {
-        const isActiveGroup = group.sections.some(([id]) => id === state.active);
-        const isOpen = !group.direct && (isActiveGroup || state.openNavGroups.includes(group.id));
-        const children = group.sections.map(([id, title, sub]) => `
-          <button class="nav-child ${id === state.active ? 'active' : ''}" onclick="switchSection('${id}')">
-            <strong>${title}</strong><small>${sub}</small>
-          </button>
-        `).join('');
+        const nav = document.getElementById('nav');
+        nav.innerHTML = NAV_GROUPS.map(group => {
+          const isActiveGroup = group.sections.some(([id]) => id === state.active);
+          const isOpen = !group.direct && (isActiveGroup || state.openNavGroups.includes(group.id));
+          const visibleSections = group.sections.filter(([id]) => id !== 'accounts' || canManageAccounts());
+          if (!group.direct && !visibleSections.length) return '';
+          const children = visibleSections.map(([id, title, sub]) => `
+            <button class="nav-child ${id === state.active ? 'active' : ''}" onclick="switchSection('${id}')">
+              <strong>${title}</strong><small>${sub}</small>
+            </button>
+          `).join('');
         return `<div class="nav-group ${isOpen ? 'open' : ''}" data-group="${group.id}">
           <button class="nav-parent ${isActiveGroup ? 'active' : ''}" onclick="${group.direct ? `switchSection('${group.direct}')` : `toggleNavGroup('${group.id}')`}">
             <strong>${group.title}</strong><small>${group.sub}</small>
@@ -2021,10 +2280,15 @@
       const minutes = date.getHours() * 60 + date.getMinutes();
       return (minutes >= 9 * 60 && minutes <= 11 * 60 + 30) || (minutes >= 13 * 60 && minutes <= 15 * 60);
     }
-    function updateServiceBadge(health = { status: 'ok' }) {
-      document.getElementById('serviceText').textContent = health.status === 'ok' ? '服务正常' : '服务异常';
-      document.getElementById('serviceDot').classList.toggle('halt', !!state.kill.active || health.status !== 'ok');
-      const killBtn = document.getElementById('killBtn');
+      function updateServiceBadge(health = { status: 'ok' }) {
+        document.getElementById('serviceText').textContent = health.status === 'ok' ? '服务正常' : '服务异常';
+        document.getElementById('serviceDot').classList.toggle('halt', !!state.kill.active || health.status !== 'ok');
+        const authPill = document.getElementById('authPill');
+        if (authPill) {
+          const u = state.auth.user || {};
+          authPill.textContent = u.phone ? `${u.name || u.phone} · ${u.role_label || u.role}` : '未登录';
+        }
+        const killBtn = document.getElementById('killBtn');
       if (killBtn) {
         killBtn.textContent = state.kill.active ? '解除熔断' : '熔断';
         killBtn.className = state.kill.active ? 'btn green' : 'btn danger';
@@ -2066,19 +2330,23 @@
       state.loadedSections.market = true;
       if (renderAfter && state.active === 'market') renderMarket();
     }
-    async function refreshPortfolioData({ renderAfter = true } = {}) {
-      const [portfolio, positions, orders, stats, aiTrustee] = await Promise.all([
-        api('/api/v1/quant/portfolio', { timeout: 8000 }).catch(() => state.portfolio || {}),
-        api('/api/v1/quant/portfolio/positions', { timeout: 8000 }).catch(() => ({ positions: state.positions || [] })),
-        api('/api/v1/quant/portfolio/orders?limit=40', { timeout: 8000 }).catch(() => ({ orders: state.orders || [] })),
-        api('/api/v1/quant/portfolio/statistics', { timeout: 8000 }).catch(() => state.stats || {}),
-        api('/api/v1/quant/ai-trustee/status', { timeout: 8000, noCache: true }).catch(() => state.aiTrustee || {})
-      ]);
+      async function refreshPortfolioData({ renderAfter = true } = {}) {
+        const [portfolio, positions, orders, stats, aiTrustee, brokers, brokerAccounts] = await Promise.all([
+          api('/api/v1/quant/portfolio', { timeout: 8000 }).catch(() => state.portfolio || {}),
+          api('/api/v1/quant/portfolio/positions', { timeout: 8000 }).catch(() => ({ positions: state.positions || [] })),
+          api('/api/v1/quant/portfolio/orders?limit=40', { timeout: 8000 }).catch(() => ({ orders: state.orders || [] })),
+          api('/api/v1/quant/portfolio/statistics', { timeout: 8000 }).catch(() => state.stats || {}),
+          api('/api/v1/quant/ai-trustee/status', { timeout: 8000, noCache: true }).catch(() => state.aiTrustee || {}),
+          api('/api/v1/brokers', { timeout: 8000 }).catch(() => state.brokers || { brokers: [] }),
+          api('/api/v1/brokers/accounts', { timeout: 8000, noCache: true }).catch(() => ({ accounts: state.brokers.accounts || [] }))
+        ]);
       state.portfolio = portfolio || {};
       state.positions = positions.positions || [];
       state.orders = orders.orders || [];
-      state.stats = stats || {};
-      state.aiTrustee = aiTrustee || state.aiTrustee || {};
+        state.stats = stats || {};
+        state.aiTrustee = aiTrustee || state.aiTrustee || {};
+        state.brokers.brokers = brokers.brokers || state.brokers.brokers || [];
+        state.brokers.accounts = brokerAccounts.accounts || state.brokers.accounts || [];
       state.loadedSections.portfolio = true;
       if (renderAfter && state.active === 'portfolio') renderPortfolio();
     }
@@ -2114,7 +2382,7 @@
       if (renderAfter && state.active === 'ai' && !isAIFormEditing()) renderAI();
       if (showToast) toast('智能模型配置已刷新');
     }
-    async function refreshDataHubData({ renderAfter = true } = {}) {
+      async function refreshDataHubData({ renderAfter = true } = {}) {
       const [cacheStatus, dataCoverage] = await Promise.all([
         api('/api/v1/market/cache/status', { timeout: 9000, noCache: true }).catch(() => state.marketCache || {}),
         api('/api/v1/market/data-hub/coverage', { timeout: 12000, noCache: true }).catch(() => state.dataCoverage || {})
@@ -2122,10 +2390,29 @@
       state.marketCache = cacheStatus || {};
       state.dataCoverage = dataCoverage || {};
       state.loadedSections.datahub = true;
-      if (renderAfter && state.active === 'datahub') renderDataHub();
-    }
-    async function ensureSectionData(id) {
-      if (id === 'dashboard' && !state.loadedSections.dashboard) return refreshDashboardData();
+        if (renderAfter && state.active === 'datahub') renderDataHub();
+      }
+      async function refreshAccountsData({ renderAfter = true } = {}) {
+        if (!canManageAccounts()) {
+          state.auth.users = [];
+          if (renderAfter && state.active === 'accounts') renderAccounts();
+          return;
+        }
+        const [users, brokers, accounts] = await Promise.all([
+          api('/api/v1/auth/users', { timeout: 9000, noCache: true }).catch(() => ({ users: [], roles: {} })),
+          api('/api/v1/brokers', { timeout: 9000 }).catch(() => ({ brokers: [] })),
+          api('/api/v1/brokers/accounts', { timeout: 9000, noCache: true }).catch(() => ({ accounts: [] })),
+        ]);
+        state.auth.users = users.users || [];
+        state.auth.roles = users.roles || {};
+        state.brokers.brokers = brokers.brokers || [];
+        state.brokers.accounts = accounts.accounts || [];
+        state.loadedSections.accounts = true;
+        if (renderAfter && state.active === 'accounts') renderAccounts();
+      }
+      async function ensureSectionData(id) {
+        if (!state.auth.user && id !== 'dashboard') return;
+        if (id === 'dashboard' && !state.loadedSections.dashboard) return refreshDashboardData();
       if (id === 'market' && !state.loadedSections.market) return refreshMarketData();
       if (id === 'sectors' && !((state.sectors || {}).sectors || []).length) {
         state.sectors = await api('/api/v1/sectors', { timeout: 16000 }).catch(() => state.sectors || { sectors: [], summary: {}, flow_history: [] });
@@ -2146,10 +2433,11 @@
         if (state.active === 'news') renderNews();
       }
       if (id === 'risk' && !state.loadedSections.risk) return refreshRiskData();
-      if (id === 'datahub' && !state.loadedSections.datahub) return refreshDataHubData();
-      if (id === 'ai' && !state.loadedSections.ai) return refreshAIData();
-      if (id === 'agents' && !state.loadedSections.agents) return refreshAgentsData();
-    }
+        if (id === 'datahub' && !state.loadedSections.datahub) return refreshDataHubData();
+        if (id === 'ai' && !state.loadedSections.ai) return refreshAIData();
+        if (id === 'accounts') return refreshAccountsData();
+        if (id === 'agents' && !state.loadedSections.agents) return refreshAgentsData();
+      }
 
     async function refreshAll() {
       if (state.refreshRunning) {
@@ -2221,8 +2509,9 @@
       if (!silent) toast('AI托管状态已刷新');
       return state.aiTrustee;
     }
-    async function startAITrustee(accountType) {
-      const input = document.getElementById(`${accountType}TrusteeEndDate`);
+      async function startAITrustee(accountType) {
+        if (isReadonly()) return toast('访问账号只能参观，不能开启托管或交易。');
+        const input = document.getElementById(`${accountType}TrusteeEndDate`);
       const endDate = input && input.value ? input.value : new Date().toISOString().slice(0, 10);
       const label = accountType === 'live' ? '实操盘' : '模拟盘';
       const progress = startProgressToast(`正在开启${label}AI托管...`);
@@ -2245,8 +2534,9 @@
         `费用：佣金万三，卖出印花税万五，过户费十万分之一。`
       ]);
     }
-    async function stopAITrustee(accountType) {
-      const res = await api('/api/v1/quant/ai-trustee/stop', {
+      async function stopAITrustee(accountType) {
+        if (isReadonly()) return toast('访问账号只能参观，不能停止托管。');
+        const res = await api('/api/v1/quant/ai-trustee/stop', {
         method: 'POST',
         body: JSON.stringify({ account_type: accountType === 'live' ? 'live' : 'simulation', reason: '用户手动停止AI托管' })
       }).catch(e => ({ success: false, error: e.message }));
@@ -2662,6 +2952,7 @@
       state.ai.config = { ...(state.ai.config || {}), provider };
     }
     async function saveAIConnectionConfig(showToast = true) {
+      if (!canModifySensitive()) return toast('当前账号不能修改 AI 连接和密钥。');
       const provider = document.getElementById('aiProvider')?.value || 'openai_compatible';
       const base_url = document.getElementById('aiBaseUrl')?.value.trim() || '';
       const api_key = document.getElementById('aiApiKey')?.value.trim() || '';
@@ -2676,6 +2967,7 @@
       return res;
     }
     async function detectAIModels() {
+      if (!canModifySensitive()) return toast('当前账号不能检测或保存 AI 模型。');
       const provider = document.getElementById('aiProvider')?.value || 'openai_compatible';
       const base_url = document.getElementById('aiBaseUrl')?.value.trim() || '';
       const api_key = document.getElementById('aiApiKey')?.value.trim() || '';
@@ -2697,6 +2989,7 @@
       renderAI();
     }
     async function saveRiskVerifierConfig(showToast = true) {
+      if (!canModifySensitive()) return toast('当前账号不能修改独立风控模型。');
       const provider = document.getElementById('riskAiProvider')?.value || 'openai_compatible';
       const base_url = document.getElementById('riskAiBaseUrl')?.value.trim() || '';
       const api_key = document.getElementById('riskAiApiKey')?.value.trim() || '';
@@ -2712,6 +3005,7 @@
       return res;
     }
     async function detectRiskVerifierModels() {
+      if (!canModifySensitive()) return toast('当前账号不能检测独立风控模型。');
       const provider = document.getElementById('riskAiProvider')?.value || 'openai_compatible';
       const base_url = document.getElementById('riskAiBaseUrl')?.value.trim() || '';
       const api_key = document.getElementById('riskAiApiKey')?.value.trim() || '';
@@ -2743,6 +3037,7 @@
       renderAI();
     }
     async function selectRiskVerifierModel(modelId) {
+      if (!canModifySensitive()) return toast('当前账号不能切换独立风控模型。');
       if (!modelId) return toast('请选择风控复核模型');
       const provider = document.getElementById('riskAiProvider')?.value || ((state.ai.config || {}).risk_verifier || {}).provider || 'openai_compatible';
       const input = document.getElementById('riskAiModel');
@@ -2757,6 +3052,7 @@
       toast(res.ok ? '风控复核模型已保存' : (res.error || '保存失败'));
     }
     async function selectAIModel(modelId) {
+      if (!canModifySensitive()) return toast('当前账号不能切换默认模型。');
       if (!modelId) return toast('请选择模型');
       const provider = document.getElementById('aiProvider')?.value || state.ai.config.provider || 'openai_compatible';
       toast(`正在切换模型：${modelId}`);
@@ -2772,6 +3068,7 @@
       toast(res.ok ? '默认模型已保存' : (res.error || '模型保存失败'));
     }
     async function clearAIConfig() {
+      if (!canModifySensitive()) return toast('当前账号不能清空 AI 配置。');
       if (!confirm('确认清空主模型、接口地址和密钥？此操作只应在你手动要求时执行。')) return;
       const res = await api('/api/v1/ai/config/clear', { method: 'POST', body: JSON.stringify({ confirm: true }) }).catch(e => ({ ok: false, error: e.message }));
       state.ai.detectResult = null;
@@ -2780,6 +3077,7 @@
       toast(res.ok ? 'AI 配置已清空' : (res.error || '清空失败'));
     }
     async function saveAIPolicy() {
+      if (!canModifySensitive()) return toast('当前账号不能修改 AI 调用策略。');
       const task_policies = {};
       AI_TASKS.forEach(([key]) => {
         const defaults = AI_TASK_DEFAULTS[key] || {};
@@ -3025,6 +3323,7 @@
       if (state.active === 'risk') renderRisk();
       if (state.active === 'datahub') renderDataHub();
       if (state.active === 'ai' && !isAIFormEditing()) renderAI();
+      if (state.active === 'accounts') renderAccounts();
       if (state.active === 'tradeReview') renderTradeReview();
       if (state.active === 'agents') renderAgents();
       if (state.active === 'roadmap') renderRoadmap();
@@ -3668,7 +3967,7 @@
       if (!list.length) return '<div class="loading">暂无信号</div>';
       return list.map(s => `<div class="score-cell" style="margin-bottom:10px;cursor:pointer" onclick="openStock('${s.code}')"><div style="display:flex;justify-content:space-between;gap:10px"><strong>${escapeHtml(s.name || s.code)}</strong><span class="badge ${type === 'buy' ? 'red' : 'green'}">${type === 'buy' ? '买入' : '卖出'}</span></div><div class="score-label" style="margin-top:8px">${escapeHtml(s.reason || '')}</div><div style="display:flex;justify-content:space-between;margin-top:10px"><span>${price(s.price)}</span><strong>${safeText(s.strength, 'medium')}</strong></div></div>`).join('');
     }
-    function renderPortfolio() {
+      function renderPortfolio() {
       const trustee = state.aiTrustee || {};
       const sim = trustee.simulation || {};
       const live = trustee.live || {};
@@ -3680,22 +3979,24 @@
       const selfChecks = selfTest.checks || [];
       const today = new Date().toISOString().slice(0, 10);
       const defaultEnd = sim.end_date || today;
-      document.getElementById('portfolio').innerHTML = `
-        ${head('操盘与模拟盘', '实操盘保留权限边界；模拟盘AI托管可自由读取站内数据和选择股票，但只能执行模拟盘交易并完整记录来去。')}
-        <div class="grid cols-2">
-          <div class="card pad">
-            <div class="panel-title" style="padding:0 0 12px;border-bottom:0">操盘</div>
-            <div class="toolbar" style="margin-bottom:10px">
-              <div class="field"><label>托管至</label><input id="liveTrusteeEndDate" type="text" readonly onclick="openTrusteeCalendar('liveTrusteeEndDate')" value="${escapeHtml(defaultEnd)}"></div>
-              <button class="btn danger" onclick="startAITrustee('live')">AI托管</button>
-              <button class="btn" onclick="openAITrusteeRecords()">AI托管记录</button>
+        document.getElementById('portfolio').innerHTML = `
+          ${head('操盘与模拟盘', '实操盘保留权限边界；模拟盘AI托管可自由读取站内数据和选择股票，但只能执行模拟盘交易并完整记录来去。')}
+          ${readonlyBanner()}
+          <div class="grid cols-2">
+            <div class="card pad">
+              <div class="panel-title" style="padding:0 0 12px;border-bottom:0">实盘券商接入</div>
+              <div class="toolbar" style="margin-bottom:10px">
+                <div class="field"><label>券商</label><select id="brokerSelect">${(state.brokers.brokers || []).map(b => `<option value="${escapeHtml(b.id)}">${escapeHtml(b.name)}</option>`).join('') || '<option value="custom">自定义券商接口</option>'}</select></div>
+                <div class="field wide"><label>资金账号</label><input id="brokerAccountNo" placeholder="仅保存脱敏占位，等待券商API接入"></div>
+                ${isReadonly() ? '' : '<button class="btn danger" onclick="connectBrokerAccount()">接入实盘</button>'}
+                <button class="btn" onclick="openAITrusteeRecords()">AI托管记录</button>
+              </div>
+              <div class="kv">
+                ${kv('接入状态', escapeHtml((state.brokers.accounts || [])[0]?.message || '可选择券商并预留接入信息；真实资产、持仓、成交同步等待券商 SDK/API 适配。'))}
+                ${kv('已接账号', (state.brokers.accounts || []).map(a => `${a.broker_name} ${a.account_no_masked}`).join(' / ') || '--')}
+                ${kv('同步说明', '实盘详情接口已预留，接入券商后会同步资产、持仓、委托、成交和收益明细。')}
+              </div>
             </div>
-            <div class="kv">
-              ${kv('当前权限', escapeHtml(live.message || '实操盘托管暂未开放，真实交易不会自动下单。'))}
-              ${kv('状态', escapeHtml(live.status || 'blocked'))}
-              ${kv('说明', '真实交易接口只预留页面入口；当前AI绝对购买权只作用于模拟盘。')}
-            </div>
-          </div>
           <div class="card pad">
             <div class="panel-title" style="padding:0 0 12px;border-bottom:0">模拟盘</div>
             <div class="toolbar" style="margin-bottom:10px">
@@ -3726,9 +4027,23 @@
         <div style="height:14px"></div>
         <div class="card table-wrap"><table><thead><tr><th>股票</th><th class="num">持仓</th><th class="num">可卖</th><th class="num">成本</th><th class="num">现价</th><th class="num">浮盈</th><th class="num">止损</th></tr></thead><tbody>
           ${state.positions.map(p => `<tr onclick="openStock('${p.code}')"><td><div class="stock-name">${escapeHtml(p.name || p.code)}</div><div class="stock-code">${escapeHtml(p.code)}</div></td><td class="num">${p.quantity}</td><td class="num">${p.available_quantity}</td><td class="num">${price(p.avg_cost)}</td><td class="num">${price(p.current_price)}</td><td class="num ${num(p.floating_profit) >= 0 ? 'up' : 'down'}">${money(p.floating_profit)}</td><td class="num up">${price(p.stop_loss)}</td></tr>`).join('') || '<tr><td colspan="7"><div class="loading">暂无持仓</div></td></tr>'}
-        </tbody></table></div>`;
-    }
-    function renderLab() {
+          </tbody></table></div>`;
+      }
+      async function connectBrokerAccount() {
+        if (isReadonly()) return toast('访问账号不能接入实盘券商。');
+        const broker_id = document.getElementById('brokerSelect')?.value || 'custom';
+        const account_no = document.getElementById('brokerAccountNo')?.value.trim() || '';
+        const res = await api('/api/v1/brokers/connect', {
+          method: 'POST',
+          body: JSON.stringify({ broker_id, account_no })
+        }).catch(e => ({ ok: false, error: e.message }));
+        if (!res.ok) return toast(res.error || '券商接入失败');
+        toast('实盘券商接入信息已预留保存');
+        await refreshAccountsData(false).catch(() => {});
+        state.brokers.accounts = await api('/api/v1/brokers/accounts', { noCache: true }).then(r => r.accounts || []).catch(() => state.brokers.accounts || []);
+        renderPortfolio();
+      }
+      function renderLab() {
       const lab = state.lab || {};
       document.getElementById('lab').innerHTML = `
         ${head('回测实验室', '快速验证一个标的的均线策略，先看收益、回撤、胜率和交易次数。')}
@@ -4113,8 +4428,9 @@
       const riskProviderId = verifier.provider || 'openai_compatible';
       const riskProviderOptions = providers.map(p => `<option value="${escapeHtml(p.id)}" ${riskProviderId === p.id ? 'selected' : ''}>${providerDisplayName(p)}</option>`).join('');
       const riskModels = (verifier.available_models && verifier.available_models.length) ? verifier.available_models : ((state.ai.riskDetectResult || {}).models || []);
-      document.getElementById('ai').innerHTML = `
-        ${head('智能模型接口', '输入接口地址和密钥后检测模型列表，选择一个默认模型；后续新闻理解、评分、决策和风控复核统一读取这里的配置。')}
+        document.getElementById('ai').innerHTML = `
+          ${head('智能模型接口', '输入接口地址和密钥后检测模型列表，选择一个默认模型；后续新闻理解、评分、决策和风控复核统一读取这里的配置。')}
+          ${readonlyBanner()}
         <div class="grid cols-4">
           ${metric('接入状态', cfg.enabled ? '已启用' : '未启用', aiStatusName(cfg.last_status), cfg.enabled ? 'up' : 'muted')}
           ${metric('默认模型', escapeHtml(cfg.selected_model || '--'), cfg.provider_name ? '已选择供应商' : '未选择')}
@@ -4132,10 +4448,9 @@
                 <div class="field wide"><label>密钥</label><input id="aiApiKey" type="password" placeholder="${cfg.has_api_key ? cfg.api_key_masked : '请输入密钥'}"></div>
               </div>
               <div class="toolbar" style="margin-bottom:0">
-                <button class="btn" onclick="saveAIConnectionConfig()">保存连接</button>
-                <button class="btn primary" onclick="detectAIModels()">检测模型</button>
-                <button class="btn" onclick="refreshAIConfig()">刷新配置</button>
-                <button class="btn danger" onclick="clearAIConfig()">清空配置</button>
+                  ${canModifySensitive() ? '<button class="btn" onclick="saveAIConnectionConfig()">保存连接</button><button class="btn primary" onclick="detectAIModels()">检测模型</button>' : ''}
+                  <button class="btn" onclick="refreshAIConfig()">刷新配置</button>
+                  ${canModifySensitive() ? '<button class="btn danger" onclick="clearAIConfig()">清空配置</button>' : ''}
                 <span class="note">密钥仅保存在后端本地 JSON；接口返回时只显示脱敏状态。</span>
               </div>
               <div style="height:12px"></div>
@@ -4153,7 +4468,7 @@
               <div class="model-list">
                 ${models.length ? models.map(m => `<div class="model-row ${cfg.selected_model === m.id ? 'active' : ''}">
                   <div><strong>${escapeHtml(m.id)}</strong><small>${cfg.selected_model === m.id ? '当前默认模型' : '可选模型'}</small></div>
-                  <button class="btn ${cfg.selected_model === m.id ? 'primary' : ''}" onclick="selectAIModel(${jsArg(m.id)})">${cfg.selected_model === m.id ? '已选择' : '选择'}</button>
+                    ${canModifySensitive() ? `<button class="btn ${cfg.selected_model === m.id ? 'primary' : ''}" onclick="selectAIModel(${jsArg(m.id)})">${cfg.selected_model === m.id ? '已选择' : '选择'}</button>` : ''}
                 </div>`).join('') : '<div class="loading">尚未检测到模型。填写接口地址和密钥后点击“检测模型”。</div>'}
               </div>
             </div>
@@ -4178,15 +4493,14 @@
               <div class="field wide"><label>模型</label><input id="riskAiModel" value="${escapeHtml(verifier.selected_model || '')}" placeholder="可检测后选择，也可手动填写"></div>
             </div>
             <div class="toolbar" style="margin-bottom:0">
-              <button class="btn" onclick="saveRiskVerifierConfig()">保存风控模型</button>
-              <button class="btn primary" onclick="detectRiskVerifierModels()">检测风控模型</button>
+                ${canModifySensitive() ? '<button class="btn" onclick="saveRiskVerifierConfig()">保存风控模型</button><button class="btn primary" onclick="detectRiskVerifierModels()">检测风控模型</button>' : ''}
               <span class="note">这个模型只参与风控交叉验证；若它否决，风控报告会限制或禁止执行。</span>
             </div>
             <div style="height:12px"></div>
             <div class="model-list">
               ${riskModels.length ? riskModels.map(m => `<div class="model-row ${verifier.selected_model === m.id ? 'active' : ''}">
                 <div><strong>${escapeHtml(m.id)}</strong><small>${verifier.selected_model === m.id ? '当前风控复核模型' : '可选风控模型'}</small></div>
-                <button class="btn ${verifier.selected_model === m.id ? 'primary' : ''}" onclick="selectRiskVerifierModel(${jsArg(m.id)})">${verifier.selected_model === m.id ? '已选择' : '选择'}</button>
+                  ${canModifySensitive() ? `<button class="btn ${verifier.selected_model === m.id ? 'primary' : ''}" onclick="selectRiskVerifierModel(${jsArg(m.id)})">${verifier.selected_model === m.id ? '已选择' : '选择'}</button>` : ''}
               </div>`).join('') : '<div class="loading">尚未检测到独立风控模型。也可以先手动填写模型名并保存。</div>'}
             </div>
           </div>
@@ -4204,13 +4518,13 @@
             <div style="height:12px"></div>
             ${renderAITaskPolicies(policy)}
             <div class="toolbar" style="margin:14px 0 0">
-              <button class="btn primary" onclick="saveAIPolicy()">保存调用策略</button>
+                ${canModifySensitive() ? '<button class="btn primary" onclick="saveAIPolicy()">保存调用策略</button>' : ''}
               <span class="note">已按最高性能配置：更长上下文、更长超时、按任务拆分温度；真实下单仍由交易接口单独控制。</span>
             </div>
           </div>
         </div>`;
     }
-    function renderAITaskPolicies(policy = {}) {
+      function renderAITaskPolicies(policy = {}) {
       const rows = AI_TASKS.map(([key, name, desc]) => {
         const defaults = AI_TASK_DEFAULTS[key] || {};
         const item = (policy.task_policies || {})[key] || defaults;
@@ -4226,9 +4540,87 @@
           </div>
         </div>`;
       }).join('');
-      return `<div class="model-list">${rows}</div>`;
-    }
-    function renderDataHub() {
+        return `<div class="model-list">${rows}</div>`;
+      }
+      function renderAccounts() {
+        const user = state.auth.user || {};
+        if (!canManageAccounts()) {
+          document.getElementById('accounts').innerHTML = `
+            ${head('账号权限', '本站实行邀请制，普通账号不能自行注册。')}
+            ${readonlyBanner()}
+            <div class="card pad"><div class="loading">当前账号没有账号管理权限。</div></div>`;
+          return;
+        }
+        const rows = state.auth.users || [];
+        const roles = state.auth.roles || {};
+        document.getElementById('accounts').innerHTML = `
+          ${head('账号权限', '最高管理和次管理可以邀请注册；只有最高管理可以把普通账号提升为次管理。抽成接口先预留，不参与结算。')}
+          <div class="grid cols-4">
+            ${metric('当前账号', escapeHtml(user.name || user.phone || '--'), escapeHtml(user.role_label || '--'))}
+            ${metric('账号总数', rows.length, '邀请制')}
+            ${metric('管理权限', canManageAccounts() ? '可管理' : '无', canModifySensitive() ? '可改敏感配置' : '普通配置')}
+            ${metric('抽成预留', '已预留', '交易完成收益抽成接口')}
+          </div>
+          <div style="height:14px"></div>
+          <div class="card pad">
+            <div class="panel-title" style="padding:0 0 12px;border-bottom:0">邀请注册账号</div>
+            <div class="toolbar" style="margin-bottom:0">
+              <div class="field"><label>手机号</label><input id="newUserPhone" placeholder="用户手机号"></div>
+              <div class="field"><label>姓名</label><input id="newUserName" placeholder="显示名称"></div>
+              <div class="field"><label>初始密码</label><input id="newUserPassword" type="password" placeholder="至少8位"></div>
+              <div class="field"><label>角色</label><select id="newUserRole">
+                <option value="user">普通账号</option>
+                <option value="visitor">访问账号</option>
+                ${user.role === 'super_admin' ? '<option value="sub_admin">次管理</option>' : ''}
+              </select></div>
+              <button class="btn primary" onclick="createAccountUser()">创建账号</button>
+              <span class="note">账号不能自助注册，必须由管理或次管理录入手机号。</span>
+            </div>
+          </div>
+          <div style="height:14px"></div>
+          <div class="card table-wrap"><table>
+            <thead><tr><th>账号</th><th>角色</th><th>邀请人</th><th class="num">抽成%</th><th>状态</th><th>操作</th></tr></thead>
+            <tbody>${rows.map(r => `<tr>
+              <td><div class="stock-name">${escapeHtml(r.name || r.phone)}</div><div class="stock-code">${escapeHtml(r.phone)}</div></td>
+              <td><span class="badge ${r.role === 'super_admin' ? 'red' : r.role === 'sub_admin' ? 'blue' : r.role === 'visitor' ? 'orange' : 'gray'}">${escapeHtml(r.role_label || roles[r.role] || r.role)}</span></td>
+              <td>${escapeHtml(r.created_by || r.invited_by || '--')}</td>
+              <td class="num">${safeText(r.commission_rate_pct, 0)}</td>
+              <td>${escapeHtml(r.status || 'active')}</td>
+              <td>
+                ${user.role === 'super_admin' && r.role !== 'super_admin' ? `<button class="btn" onclick="promoteUser(${jsArg(r.phone)}, 'sub_admin')">升次管理</button>` : ''}
+                ${user.role === 'super_admin' && r.role === 'sub_admin' ? `<button class="btn" onclick="promoteUser(${jsArg(r.phone)}, 'user')">降普通</button>` : ''}
+                <button class="btn" onclick="setCommission(${jsArg(r.phone)})">抽成预留</button>
+              </td>
+            </tr>`).join('') || '<tr><td colspan="6"><div class="loading">暂无账号</div></td></tr>'}</tbody>
+          </table></div>`;
+      }
+      async function createAccountUser() {
+        const payload = {
+          phone: document.getElementById('newUserPhone')?.value.trim() || '',
+          name: document.getElementById('newUserName')?.value.trim() || '',
+          password: document.getElementById('newUserPassword')?.value || '',
+          role: document.getElementById('newUserRole')?.value || 'user',
+        };
+        const res = await api('/api/v1/auth/users', { method: 'POST', body: JSON.stringify(payload) }).catch(e => ({ ok: false, error: e.message }));
+        if (!res.ok) return toast(res.error || '账号创建失败');
+        toast('账号已创建');
+        await refreshAccountsData();
+      }
+      async function promoteUser(phone, role) {
+        const res = await api(`/api/v1/auth/users/${encodeURIComponent(phone)}/role`, { method: 'POST', body: JSON.stringify({ role }) }).catch(e => ({ ok: false, error: e.message }));
+        if (!res.ok) return toast(res.error || '角色调整失败');
+        toast('角色已更新');
+        await refreshAccountsData();
+      }
+      async function setCommission(phone) {
+        const value = prompt('填写收益抽成百分比，当前只预留接口，不参与结算。', '0');
+        if (value === null) return;
+        const res = await api(`/api/v1/auth/users/${encodeURIComponent(phone)}/commission`, { method: 'POST', body: JSON.stringify({ commission_rate_pct: Number(value) || 0 }) }).catch(e => ({ ok: false, error: e.message }));
+        if (!res.ok) return toast(res.error || '抽成预留保存失败');
+        toast(res.message || '抽成预留已保存');
+        await refreshAccountsData();
+      }
+      function renderDataHub() {
       const coverage = state.dataCoverage || {};
       const hub = coverage.hub || {};
       const runtime = ((state.marketCache || {}).market_data_hub || {}).runtime || {};
@@ -4596,8 +4988,9 @@
       const code = await resolveStockCode(document.getElementById(inputId)?.value || '');
       return createResearchReport(code);
     }
-    async function executeTrade(side, code, priceValue) {
-      const priceNum = num(priceValue);
+      async function executeTrade(side, code, priceValue) {
+        if (isReadonly()) return toast('访问账号只能参观，不能进行模拟或实盘交易。');
+        const priceNum = num(priceValue);
       const qty = num(document.getElementById('tradeQty')?.value);
       if (!code || !priceNum || !qty) return toast('请输入有效价格和数量');
       const endpoint = side === 'buy' ? '/api/v1/quant/portfolio/buy' : '/api/v1/quant/portfolio/sell';
@@ -5686,13 +6079,18 @@
       el.style.removeProperty('--card-y');
     }
 
-    async function bootstrap() {
-      loadWatchlist();
+      async function bootstrap() {
+        const authed = await refreshAuth(true);
+        if (!authed) return;
+        loadWatchlist();
       loadStrategy();
       loadAIRecommendationsLocal();
       loadAIChatLayout();
+      loadAIChatLaunchLayout();
       initAIChatDrag();
       applyAIChatLayout();
+      initAIChatLaunchDrag();
+      applyAIChatLaunchLayout();
       initNav();
       initPremiumPointerEffects();
       enhanceInteractiveSurface();
@@ -5702,6 +6100,7 @@
       document.addEventListener('keydown', (event) => {
         if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'a') {
           event.preventDefault();
+          showAIChatLaunch();
           toggleAIChat();
         }
       });
