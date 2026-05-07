@@ -71,7 +71,7 @@ def _json_safe(value):
 
 def classify_task(message: str) -> dict:
     text = str(message or "").strip()
-    email_match = re.search(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", text)
+    email_match = re.search(r"[A-Za-z0-9_.+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", text)
     top_count_match = re.search(r"([一二三四五六七八九十\d]+)\s*(?:支|只|个)?\s*(?:股票|标的|票)", text)
     target_count = _cn_number(top_count_match.group(1)) if top_count_match else 3
     wants_stock_pick = any(key in text for key in ["最值得投资", "值得投资", "支股票", "只股票", "个股票", "股票推荐", "选出", "挑出", "推荐"]) and any(
