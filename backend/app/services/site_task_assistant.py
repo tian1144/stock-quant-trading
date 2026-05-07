@@ -23,7 +23,6 @@ from app.services import (
     risk_manager,
     sector_service,
     state_store,
-    stock_screener,
     strategy_memory_service,
 )
 from app.execution.kill_switch import get_kill_switch_status
@@ -407,10 +406,7 @@ def _run_site_report_task(job_id: str):
 def collect_site_context() -> dict:
     screening = state_store.get_screening_results()[:30]
     if not screening:
-        try:
-            screening = stock_screener.run_screening(limit=60, return_all=False, strategy="short")[:30]
-        except Exception:
-            screening = []
+        screening = _build_realtime_screening_sample(limit=30)
     ai_recs = state_store.get_ai_recommendations() or {}
     sectors = []
     try:
@@ -432,6 +428,7 @@ def collect_site_context() -> dict:
         "orders_tail": state_store.get_orders()[-20:],
         "signals": state_store.get_signals()[:30],
         "screening_top": screening,
+        "screening_source": "cached_screening_results" if state_store.get_screening_results() else "realtime_cache_fast_sample",
         "investment_candidates": _build_investment_candidates(screening),
         "ai_recommendations": {
             "summary": ai_recs.get("summary", {}),
@@ -448,6 +445,67 @@ def collect_site_context() -> dict:
         "strategy_memory": strategy_memory_service.get_model_memory_context("deep_analysis"),
         "system_state": state_store.get_system_state(),
     })
+
+
+def _build_realtime_screening_sample(limit: int = 30) -> list:
+    """Build a quick candidate sample from cached quotes only.
+
+    Site AI tasks run in a background chat flow, so they should not launch a
+    full synchronous market-wide screening pass while the user is waiting.
+    """
+    rows = []
+    realtime = state_store.get_all_realtime() or {}
+    for code, quote in realtime.items():
+        if not isinstance(quote, dict):
+            continue
+        stock = state_store.get_stock_info(str(code)) or {}
+        name = quote.get("name") or stock.get("name") or ""
+        price = _to_float(quote.get("price") or quote.get("current_price") or quote.get("close"))
+        pct = _to_float(quote.get("pct_change") or quote.get("change_pct") or quote.get("pct_chg"))
+        amount = _to_float(quote.get("amount"))
+        volume_ratio = _to_float(quote.get("volume_ratio"))
+        turnover = _to_float(quote.get("turnover_rate") or quote.get("turnover"))
+        if price <= 0:
+            continue
+        score = 50.0
+        score += max(-8.0, min(10.0, pct * 1.2))
+        if amount >= 1_000_000_000:
+            score += 8
+        elif amount >= 300_000_000:
+            score += 5
+        elif amount >= 80_000_000:
+            score += 2
+        if 1.0 <= volume_ratio <= 3.5:
+            score += 4
+        elif volume_ratio > 5:
+            score -= 3
+        if 1.0 <= turnover <= 8.0:
+            score += 3
+        elif turnover > 15:
+            score -= 4
+        rows.append({
+            "code": str(code),
+            "name": name,
+            "score": round(score, 2),
+            "final_score": round(score, 2),
+            "price": price,
+            "pct_change": pct,
+            "amount": amount,
+            "volume_ratio": volume_ratio,
+            "turnover_rate": turnover,
+            "reason": f"来自实时行情缓存：涨跌幅 {pct:.2f}%，成交额 {amount:.0f}，量比 {volume_ratio:.2f}，换手 {turnover:.2f}%。",
+            "screening_logic": "站内AI任务快速样本，不触发全市场同步筛选。",
+        })
+    return sorted(rows, key=lambda x: x.get("score", 0), reverse=True)[:limit]
+
+
+def _to_float(value) -> float:
+    try:
+        if value is None or value == "":
+            return 0.0
+        return float(value)
+    except Exception:
+        return 0.0
 
 
 def _build_investment_candidates(screening: list) -> list:
