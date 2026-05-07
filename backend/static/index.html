@@ -2192,6 +2192,17 @@
       for (let i = 0; i < 240; i++) {
         await new Promise(resolve => setTimeout(resolve, 1500));
         const data = await api(`/api/v1/ai/tasks/status/${encodeURIComponent(jobId)}`, { timeout: 20000 }).catch(e => ({ ok: false, error: e.message }));
+        if (!data.ok) {
+          const text = `任务状态获取失败：${data.error || '任务不存在或服务已重启，请重新发起任务。'}`;
+          const last = state.aiChat.messages[state.aiChat.messages.length - 1];
+          if (last && last.role === 'assistant' && (last.text || '').startsWith('任务')) {
+            last.text = text;
+          } else {
+            state.aiChat.messages.push({ role: 'assistant', text });
+          }
+          renderAIChat();
+          return;
+        }
         const job = data.job || {};
         const text = job.status === 'done'
           ? buildAIExecutableTaskDoneText(job)
@@ -2219,7 +2230,7 @@
       const lines = [
         '任务完成。',
         result.summary ? `摘要：${result.summary}` : '',
-        result.pdf_url ? `PDF下载：${location.origin}${result.pdf_url}` : '',
+        result.pdf_url ? 'PDF报告已生成，可在任务产物中下载。' : '',
         email.requested ? `邮件：${email.message || (email.sent ? '已发送' : '未发送')}` : ''
       ].filter(Boolean);
       return lines.join('\n');

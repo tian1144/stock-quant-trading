@@ -76,6 +76,22 @@ def _jobs_path() -> str:
     return os.path.join(BASE_DIR, "jobs.json")
 
 
+def _smtp_config_path() -> str:
+    return os.path.join(BASE_DIR, "smtp_config.json")
+
+
+def _read_smtp_config() -> dict:
+    path = _smtp_config_path()
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
 def _load_jobs_unlocked():
     global JOBS_LOADED, JOBS
     if JOBS_LOADED:
@@ -820,12 +836,13 @@ def send_email_with_attachment(to_email: str, subject: str, body: str, attachmen
             "sent": False,
             "message": "PDF已生成，但没有识别到有效收件邮箱。请检查邮箱地址。",
         }
-    host = os.getenv("SMTP_HOST", "")
-    port = int(os.getenv("SMTP_PORT", "465") or 465)
-    user = os.getenv("SMTP_USER", "")
-    password = os.getenv("SMTP_PASSWORD", "")
-    sender = os.getenv("SMTP_FROM", user)
-    use_tls = str(os.getenv("SMTP_USE_TLS", "1")).lower() not in {"0", "false", "no"}
+    smtp_config = _read_smtp_config()
+    host = os.getenv("SMTP_HOST", "") or str(smtp_config.get("host") or "")
+    port = int(os.getenv("SMTP_PORT", "") or smtp_config.get("port") or 465)
+    user = os.getenv("SMTP_USER", "") or str(smtp_config.get("user") or "")
+    password = os.getenv("SMTP_PASSWORD", "") or str(smtp_config.get("password") or "")
+    sender = os.getenv("SMTP_FROM", "") or str(smtp_config.get("sender") or user)
+    use_tls = str(os.getenv("SMTP_USE_TLS", "") or smtp_config.get("use_tls", "1")).lower() not in {"0", "false", "no"}
     if not (host and user and password and sender):
         return {
             "requested": True,

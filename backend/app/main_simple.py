@@ -2135,7 +2135,7 @@ async def ai_chat(payload: dict = Body(...)):
             return {
                 "ok": True,
                 "mode": "task",
-                "answer": f"已启动任务：{task_intent.get('title', '站内AI任务')}。我会收集站内信息、生成报告产物，并按需处理邮件发送。任务号：{job.get('job_id')}",
+                "answer": f"已启动任务：{task_intent.get('title', '站内AI任务')}。我会收集站内信息、生成报告产物，并按需处理邮件发送。",
                 "task": job,
                 "intent": task_intent,
                 "ai_meta": {"used_ai": False, "task_started": True},
