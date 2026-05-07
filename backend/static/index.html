@@ -801,7 +801,7 @@
       line-height: 1.6;
     }
     .ai-chat-launch {
-      position: fixed; right: 18px; bottom: 78px; z-index: 95;
+      position: fixed; right: 18px; bottom: 78px; z-index: 155;
       width: 30px; height: 30px; border-radius: 50%; border: 1px solid rgba(185,55,62,.22);
       background: #e9868b; color: #fff; font-weight: 900; font-size: 11px;
       box-shadow: 0 10px 22px rgba(150,42,48,.16); cursor: grab;
@@ -823,18 +823,21 @@
     }
     .ai-hide-target.show { display: grid; }
     .ai-hide-target.active { transform: scale(1.08); background: #9f1d1d; }
-    .ai-chat { position: fixed; right: 18px; bottom: 132px; z-index: 140; width: min(460px, calc(100vw - 28px)); min-width: 320px; min-height: 300px; display: none; resize: both; overflow: auto; }
+    .ai-chat { position: fixed; right: 18px; bottom: 132px; z-index: 140; width: min(460px, calc(100vw - 28px)); height: min(560px, calc(100vh - 156px)); min-width: 320px; min-height: 300px; display: none; resize: both; overflow: hidden; }
     .ai-chat.open { display: block; }
-    .ai-chat-card { height: 100%; display: flex; flex-direction: column; background: #fff; border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); overflow: hidden; }
+    .ai-chat-card { height: 100%; min-height: 0; display: flex; flex-direction: column; background: #fff; border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); overflow: hidden; }
     .ai-chat-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 14px; border-bottom: 1px solid var(--line); background: #fff7f7; }
-    .ai-chat-head { cursor: move; user-select: none; }
+    .ai-chat-head { cursor: move; user-select: none; flex-shrink: 0; }
     .ai-chat-head strong { color: var(--red); }
-    .ai-chat-body { flex: 1; min-height: 160px; overflow: auto; padding: 12px; background: #fbfcfe; }
+    .ai-chat-body { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; padding: 12px; background: #fbfcfe; scrollbar-width: thin; scrollbar-color: rgba(215,25,32,.34) rgba(226,232,240,.72); }
+    .ai-chat-body::-webkit-scrollbar { width: 9px; }
+    .ai-chat-body::-webkit-scrollbar-track { background: rgba(226,232,240,.72); border-radius: 999px; }
+    .ai-chat-body::-webkit-scrollbar-thumb { background: rgba(215,25,32,.34); border-radius: 999px; border: 2px solid rgba(226,232,240,.72); }
     .ai-msg { margin-bottom: 10px; display: flex; }
     .ai-msg.user { justify-content: flex-end; }
     .ai-bubble { max-width: 86%; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--line); background: #fff; line-height: 1.65; white-space: pre-wrap; }
     .ai-msg.user .ai-bubble { background: #fff1f1; border-color: rgba(215,25,32,.18); }
-    .ai-chat-input { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); background: #fff; }
+    .ai-chat-input { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); background: #fff; flex-shrink: 0; }
     .ai-chat-input textarea { flex: 1; min-height: 42px; max-height: 96px; resize: vertical; border: 1px solid var(--line); border-radius: 10px; padding: 9px; font: inherit; }
 
     /* Premium red trading theme */
@@ -1287,7 +1290,7 @@
       .hero h1 { font-size: 28px; }
       .metric { min-height: 112px; }
       .table-wrap { border-radius: 12px; }
-      .ai-chat { right: 10px; bottom: 118px; width: calc(100vw - 20px); min-width: 0; max-height: 70vh; resize: none; }
+      .ai-chat { right: 10px; bottom: 118px; width: calc(100vw - 20px); height: 70vh; min-width: 0; max-height: 70vh; resize: none; }
       .ai-chat-launch { right: 12px; bottom: 58px; }
       .field, .field.wide { width: 100%; min-width: 0; }
     }
@@ -2148,18 +2151,37 @@
         applyAIChatLayout();
         if (!state.aiChat.messages.length) {
           state.aiChat.messages.push({ role: 'assistant', text: '您好，您有什么想要了解的吗？' });
-          renderAIChat();
+          renderAIChat({ forceScroll: true });
         }
         setTimeout(() => document.getElementById('aiChatInput')?.focus(), 0);
       }
     }
-    function renderAIChat() {
+    function loadAIChatMessages() {
+      try {
+        const saved = JSON.parse(localStorage.getItem('quant_ai_chat_messages') || '[]');
+        if (Array.isArray(saved)) {
+          state.aiChat.messages = saved
+            .filter(m => m && ['user', 'assistant'].includes(m.role) && typeof m.text === 'string')
+            .slice(-80);
+        }
+      } catch {
+        state.aiChat.messages = [];
+      }
+    }
+    function saveAIChatMessages() {
+      try {
+        localStorage.setItem('quant_ai_chat_messages', JSON.stringify((state.aiChat.messages || []).slice(-80)));
+      } catch {}
+    }
+    function renderAIChat(options = {}) {
       const body = document.getElementById('aiChatBody');
       if (!body) return;
+      const shouldStick = options.forceScroll || body.scrollHeight - body.scrollTop - body.clientHeight < 56;
       body.innerHTML = (state.aiChat.messages || []).map(m => `
         <div class="ai-msg ${m.role === 'user' ? 'user' : 'assistant'}"><div class="ai-bubble">${escapeHtml(m.text || '')}</div></div>
       `).join('');
-      body.scrollTop = body.scrollHeight;
+      saveAIChatMessages();
+      if (shouldStick) body.scrollTop = body.scrollHeight;
     }
     async function sendAIChat() {
       const input = document.getElementById('aiChatInput');
@@ -2168,7 +2190,7 @@
       input.value = '';
       state.aiChat.messages.push({ role: 'user', text });
       state.aiChat.messages.push({ role: 'assistant', text: '正在思考...' });
-      renderAIChat();
+      renderAIChat({ forceScroll: true });
       const res = await api('/api/v1/ai/chat', {
         method: 'POST',
         timeout: 120000,
@@ -2182,7 +2204,7 @@
       }).catch(e => ({ answer: `对话失败：${e.message}`, ai_meta: { used_ai: false } }));
       state.aiChat.messages.pop();
       state.aiChat.messages.push({ role: 'assistant', text: res.answer || '没有拿到有效回复。' });
-      renderAIChat();
+      renderAIChat({ forceScroll: true });
       if (res.mode === 'task' && res.task?.job_id) {
         pollAIExecutableTask(res.task.job_id);
       }
@@ -6255,6 +6277,7 @@
       loadAIRecommendationsLocal();
       loadAIChatLayout();
       loadAIChatLaunchLayout();
+      loadAIChatMessages();
       initAIChatDrag();
       applyAIChatLayout();
       initAIChatLaunchDrag();
