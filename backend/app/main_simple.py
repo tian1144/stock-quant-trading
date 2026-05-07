@@ -187,6 +187,10 @@ _market_data_hub_job = {
     "last_intraday_run_at": None,
     "last_universe_open_date": None,
     "last_universe_close_date": None,
+    "realtime_cursor": 0,
+    "realtime_full_cycle_count": 0,
+    "last_realtime_total": 0,
+    "last_realtime_slice": "",
     "message": "行情数据引入中枢等待调度",
 }
 
@@ -797,6 +801,42 @@ def _is_postclose_window(now: datetime) -> bool:
     return 15 * 60 + 3 <= current <= 16 * 60
 
 
+def _build_realtime_refresh_codes(queues: dict, third_limit: int = 700) -> list:
+    first = list(queues.get("first") or [])
+    second = list(queues.get("second") or [])[:300]
+    priority_codes = first + [code for code in second if code not in set(first)]
+    third = [code for code in (queues.get("third_sample") or []) if code not in set(priority_codes)]
+    if not third:
+        _market_data_hub_job.update({
+            "realtime_cursor": 0,
+            "last_realtime_total": len(priority_codes),
+            "last_realtime_slice": "priority_only",
+        })
+        return priority_codes
+
+    cursor = int(_market_data_hub_job.get("realtime_cursor") or 0) % len(third)
+    limit = max(0, min(int(third_limit), len(third)))
+    if cursor + limit <= len(third):
+        sample = third[cursor:cursor + limit]
+        next_cursor = cursor + limit
+    else:
+        tail = third[cursor:]
+        head_count = limit - len(tail)
+        sample = tail + third[:head_count]
+        next_cursor = head_count
+        _market_data_hub_job["realtime_full_cycle_count"] = int(_market_data_hub_job.get("realtime_full_cycle_count") or 0) + 1
+    if next_cursor >= len(third):
+        next_cursor = 0
+        _market_data_hub_job["realtime_full_cycle_count"] = int(_market_data_hub_job.get("realtime_full_cycle_count") or 0) + 1
+
+    _market_data_hub_job.update({
+        "realtime_cursor": next_cursor,
+        "last_realtime_total": len(priority_codes) + len(sample),
+        "last_realtime_slice": f"{sample[0]}-{sample[-1]}" if sample else "none",
+    })
+    return priority_codes + sample
+
+
 def _market_data_hub_loop():
     """统一调度行情数据引入：主数据、实时快照、重点分时和覆盖率队列。"""
     market_data_hub.start_hub()
@@ -818,7 +858,7 @@ def _market_data_hub_loop():
                 market_data_hub.sync_universe(lambda: _load_stock_universe_fast(force_refresh=True))
                 _market_data_hub_job["last_universe_close_date"] = today
             if _is_realtime_window(now):
-                realtime_codes = queues.get("first", []) + queues.get("second", [])[:300] + queues.get("third_sample", [])[:700]
+                realtime_codes = _build_realtime_refresh_codes(queues, third_limit=700)
                 market_data_hub.refresh_realtime(realtime_codes, batch_size=50)
                 if not _market_data_hub_job.get("last_intraday_run_at") or time.time() - _market_data_hub_job.get("last_intraday_ts", 0) >= 30:
                     market_data_hub.refresh_intraday_priority(first_limit=120, second_limit=80)
