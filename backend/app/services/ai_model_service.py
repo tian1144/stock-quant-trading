@@ -96,6 +96,13 @@ DEFAULT_TASK_POLICIES = {
         "max_context_events": 80,
         "description": "综合新闻、公告、行情、板块、资金和技术结构做高质量研判。",
     },
+    "task_planning": {
+        "name": "任务理解",
+        "temperature": 0.03,
+        "timeout_seconds": 18,
+        "max_context_events": 20,
+        "description": "理解用户自然语言意图，判断是否要执行站内任务、生成报告、选股或发送邮件。",
+    },
     "risk_review": {
         "name": "风控复核",
         "temperature": 0.05,

@@ -71,37 +71,157 @@ def _json_safe(value):
 
 
 def classify_task(message: str) -> dict:
+    llm_intent = _classify_task_with_model(message)
+    if llm_intent:
+        return llm_intent
+    return _classify_task_fallback(message)
+
+
+def _classify_task_with_model(message: str) -> Optional[dict]:
     text = str(message or "").strip()
+    if not text:
+        return None
     email = _extract_email(text)
-    top_count_match = re.search(r"([一二三四五六七八九十\d]+)\s*(?:支|只|个)?\s*(?:股票|标的|票)", text)
-    target_count = _cn_number(top_count_match.group(1)) if top_count_match else 3
-    wants_stock_pick = any(key in text for key in ["最值得投资", "值得投资", "支股票", "只股票", "个股票", "股票推荐", "选出", "挑出", "推荐"]) and any(
-        key in text for key in ["股票", "标的", "投资", "买", "关注"]
+    system_prompt = (
+        "你是量化智能猎人的任务规划器。你的工作不是回答用户，而是理解用户这句话要不要触发站内可执行任务。"
+        "你必须主动理解语义、上下文和隐含动作，不要只做关键词匹配。"
+        "可执行任务只有两类："
+        "1) site_report：总结/复盘/整理站内信息、AI交易情况、持仓、风控、新闻、板块、模拟盘、任务状态，并可生成PDF或邮件发送。"
+        "2) investment_report：围绕股票/标的/投资/买入/关注/某月机会/推荐若干只股票做投研筛选报告，并可生成PDF或邮件发送。"
+        "普通闲聊、概念解释、单纯问功能在哪里、没有要求你执行或整理站内信息的问题，返回 chat。"
+        "如果用户给了邮箱，通常表示希望生成内容并发送；如果用户说发我、发过去、邮件、邮箱，也表示需要邮件，但没有邮箱时 missing=email。"
+        "如果用户没有明确说PDF，但说报告/总结/复盘/整理/发送，也可以执行任务。"
+        "只输出JSON，不要解释。"
     )
-    wants_report = any(key in text for key in ["报告", "总结", "汇总", "复盘", "PDF", "pdf", "邮件", "邮箱", "发送"])
-    wants_send = any(key in text for key in ["邮件", "邮箱", "发送", "发给", "email", "mail"])
-    wants_pdf = any(key in text for key in ["PDF", "pdf", "报告", "总结", "汇总", "复盘"])
-    if wants_send and email and any(key in text for key in ["股票", "投资", "标的", "买入", "关注"]):
-        wants_stock_pick = True
+    payload = {
+        "message": text,
+        "extracted_email": email,
+        "allowed_task_types": ["chat", "site_report", "investment_report"],
+        "current_date": datetime.now().strftime("%Y-%m-%d"),
+        "site_capabilities": [
+            "读取站内行情、板块、新闻、AI推荐、模拟盘、持仓、交易记录、风控、策略记忆",
+            "生成Markdown/PDF报告",
+            "使用SMTP发送邮件",
+            "围绕站内候选和策略记忆做投研选股报告",
+        ],
+    }
+    schema = """{
+  "task_type": "chat|site_report|investment_report",
+  "can_execute": true,
+  "requires_email": false,
+  "email": "",
+  "missing": "",
+  "title": "简短中文任务标题",
+  "target_count": 3,
+  "intent_reason": "一句话说明你理解到的真实意图",
+  "confidence": 0.0
+}"""
+    parsed, meta = ai_model_service.chat_json("task_planning", system_prompt, payload, schema)
+    if not parsed or not meta.get("ok"):
+        return None
+    task_type = str(parsed.get("task_type") or "chat").strip()
+    if task_type not in {"chat", "site_report", "investment_report"}:
+        return None
+    confidence = float(parsed.get("confidence") or 0)
+    if confidence < 0.55:
+        return None
+    requires_email = bool(parsed.get("requires_email"))
+    model_email = _extract_email(parsed.get("email") or "") or email
+    if email:
+        model_email = email
+        requires_email = True
+    if task_type == "chat":
+        fallback = _classify_task_fallback(message)
+        if fallback.get("can_execute") and (fallback.get("email") or fallback.get("requires_email")):
+            fallback["planner"] = "fallback_after_model_chat"
+            fallback["model_intent_reason"] = parsed.get("intent_reason") or ""
+            return fallback
+        return {
+            "task_type": "chat",
+            "can_execute": False,
+            "requires_email": False,
+            "email": "",
+            "missing": "",
+            "title": "",
+            "target_count": 3,
+            "intent_reason": parsed.get("intent_reason") or "模型判断为普通对话。",
+            "confidence": confidence,
+            "planner": "model",
+        }
+    target_count = _coerce_count(parsed.get("target_count"), default=3)
+    return {
+        "task_type": task_type,
+        "can_execute": True,
+        "requires_email": requires_email,
+        "email": model_email,
+        "missing": "email" if requires_email and not model_email else str(parsed.get("missing") or ""),
+        "title": str(parsed.get("title") or ("自主投研选股报告" if task_type == "investment_report" else "站内信息汇总报告")),
+        "target_count": max(1, min(10, target_count)),
+        "intent_reason": parsed.get("intent_reason") or "模型已理解为可执行站内任务。",
+        "confidence": confidence,
+        "planner": "model",
+    }
+
+
+def _classify_task_fallback(message: str) -> dict:
+    """Infer whether a chat message should become an executable site task.
+
+    Fallback only.  The primary path is model-based planning above.
+    """
+    text = str(message or "").strip()
+    compact = re.sub(r"\s+", "", text.lower())
+    email = _extract_email(text)
+    target_count = _extract_target_count(text)
+
+    delivery_intent = bool(email) or _contains_any(compact, [
+        "发邮箱", "发送邮箱", "发到邮箱", "发邮件", "发送邮件", "邮件给", "邮箱发",
+        "发给我", "发送给我", "email", "mail",
+    ])
+    artifact_intent = _contains_any(compact, [
+        "pdf", "报告", "研报", "总结", "汇总", "复盘", "整理", "导出", "生成",
+        "日报", "周报", "发送", "发给", "发到",
+    ])
+    site_info_intent = _contains_any(compact, [
+        "今天", "今日", "站内", "本网站", "ai", "交易情况", "交易记录", "操作",
+        "思路", "持仓", "模拟盘", "风控", "选股", "候选", "推荐池", "复核池",
+    ])
+    stock_intent = _contains_any(compact, [
+        "股票", "个股", "标的", "票", "投资", "买入", "关注", "推荐", "选出",
+        "挑出", "值得", "最值得", "六月", "6月", "下个月", "主线", "板块",
+    ])
+    ranking_intent = _contains_any(compact, [
+        "三只", "三支", "3只", "3支", "前3", "前三", "top3", "top", "几只",
+        "推荐", "选出", "挑出", "值得投资", "重点关注",
+    ])
+    review_intent = _contains_any(compact, [
+        "交易情况", "交易复盘", "操作复盘", "今天ai", "今日ai", "ai思路",
+        "它的思路", "为什么买", "为什么卖", "买入理由", "卖出理由",
+    ])
+
+    wants_stock_pick = stock_intent and (ranking_intent or delivery_intent or artifact_intent)
+    wants_site_report = artifact_intent or review_intent or delivery_intent
+
     if wants_stock_pick:
         return {
             "task_type": "investment_report",
             "can_execute": True,
-            "requires_email": wants_send,
+            "requires_email": delivery_intent,
             "email": email,
-            "missing": "email" if wants_send and not email else "",
+            "missing": "email" if delivery_intent and not email else "",
             "title": "自主投研选股报告",
             "target_count": max(1, min(10, target_count or 3)),
+            "intent_reason": "识别到股票/投资对象，并包含推荐、数量、报告或发送意图。",
         }
-    if wants_report or wants_pdf or wants_send:
+    if wants_site_report and (site_info_intent or artifact_intent):
         return {
             "task_type": "site_report",
             "can_execute": True,
-            "requires_email": wants_send,
+            "requires_email": delivery_intent,
             "email": email,
-            "missing": "email" if wants_send and not email else "",
+            "missing": "email" if delivery_intent and not email else "",
             "title": "站内信息汇总报告",
             "target_count": max(1, min(10, target_count or 3)),
+            "intent_reason": "识别到站内信息、复盘、报告或发送任务。",
         }
     return {
         "task_type": "chat",
@@ -110,7 +230,12 @@ def classify_task(message: str) -> dict:
         "email": "",
         "missing": "",
         "title": "",
+        "intent_reason": "未识别到需要执行的站内任务，按普通对话处理。",
     }
+
+
+def _contains_any(text: str, keys: list[str]) -> bool:
+    return any(key.lower() in text for key in keys)
 
 
 def _extract_email(text: str) -> str:
@@ -118,8 +243,28 @@ def _extract_email(text: str) -> str:
     return match.group(0) if match else ""
 
 
+def _extract_target_count(text: str) -> int:
+    text = str(text or "")
+    patterns = [
+        r"(?:推荐|选出|挑出|关注|投资)?\s*([一二两三四五六七八九十\d]+)\s*(?:支|只|个)?\s*(?:股票|个股|标的|票)",
+        r"(?:top|前)\s*([一二两三四五六七八九十\d]+)",
+        r"([一二两三四五六七八九十\d]+)\s*(?:支|只|个)",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return _cn_number(match.group(1))
+    return 3
+
+
+def _coerce_count(value, default: int = 3) -> int:
+    if isinstance(value, (int, float)):
+        return int(value)
+    return _cn_number(str(value or default))
+
+
 def _cn_number(text: str) -> int:
-    text = str(text or "").strip()
+    text = str(text or "").strip().lower()
     if text.isdigit():
         return int(text)
     mapping = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
