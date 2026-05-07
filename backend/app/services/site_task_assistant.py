@@ -669,6 +669,8 @@ def summarize_site_context(context: dict, job_payload: dict, task_type: str) -> 
             "如果用户提到今年6月，请按2026年6月这个未来月份做计划，不能假装已经发生。"
             "必须输出：结论名单、每只股票的站内证据、6月关注逻辑、买入前置条件、止损/风控、"
             "不推荐或暂缓理由、下一步执行清单。不要泄露API密钥或本地敏感配置。"
+            "禁止只说没有推荐或直接拒绝。若确实没有值得直接买入的标的，必须写明“暂时不推荐购买”，"
+            f"并继续给出 {target_count} 只次选观察/被迫购买时的小仓方案，说明为什么只能作为次选、触发条件、仓位上限和止损。"
             "所有买卖内容仅供研究和模拟盘参考，不能跳过风控复核。"
         )
     else:
@@ -676,6 +678,7 @@ def summarize_site_context(context: dict, job_payload: dict, task_type: str) -> 
             "你是量化智能猎人的任务型AI助手。请根据站内上下文生成一份可执行投研任务报告，"
             "必须用中文，结构清晰，包含：一页摘要、市场状态、选股和AI推荐、持仓和模拟盘、"
             "新闻/板块/情绪、主要风险、下一步任务清单。不要泄露任何API密钥或本地敏感配置。"
+            "不要只拒绝用户请求；如果当前没有确定答案，必须说明暂不建议直接执行，并给出可执行的替代方案、观察条件或自选方案。"
             "涉及交易必须声明这只是研究和模拟盘参考，不能跳过风控复核。"
         )
     user_message = f"用户任务：{user_task}\n请直接完成任务并生成可发送报告正文。"
@@ -740,7 +743,18 @@ def _fallback_markdown_report(context: dict, reason: str, target_count: int = 3,
     for item in ai_recs[:8]:
         lines.append(f"- {item.get('code')} {item.get('name', '')}：{item.get('ai_reason') or item.get('reason') or item.get('conclusion', '')}")
     if not ai_recs:
-        lines.append("- 当前没有可直接买入的AI推荐。")
+        lines.append("- 当前没有可直接买入的AI推荐，暂时不推荐购买。")
+        alt_count = max(1, target_count)
+        if candidates:
+            lines.append(f"- 如果用户仍然需要一个次选方案，只建议从下面 {alt_count} 只里小仓观察，不能按强买信号处理：")
+            for item in candidates[:alt_count]:
+                lines.append(
+                    f"  - {item.get('code')} {item.get('name', '')}：综合排序 {item.get('rank_score')}，"
+                    f"来源 {item.get('source')}。次选理由：{item.get('reason', '')}。"
+                    "执行条件：交易时段刷新行情和资金流后仍保持强势，且风控未触发；仓位建议不超过模拟盘单票上限的三分之一，跌破关键支撑立即止损。"
+                )
+        else:
+            lines.append("- 当前连次选股票池也不足。建议先添加自选股或运行智能筛选，等系统生成重点复核池后，再从自选/复核池里给出3只备选。")
     lines.extend([
         "",
         "## 下一步任务",
