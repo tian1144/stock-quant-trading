@@ -802,12 +802,27 @@
     }
     .ai-chat-launch {
       position: fixed; right: 18px; bottom: 78px; z-index: 95;
-      width: 34px; height: 34px; border-radius: 50%; border: 1px solid rgba(215,25,32,.25);
-      background: #d71920; color: #fff; font-weight: 900; font-size: 12px;
-      box-shadow: 0 14px 30px rgba(215,25,32,.22); cursor: pointer;
+      width: 30px; height: 30px; border-radius: 50%; border: 1px solid rgba(185,55,62,.22);
+      background: #e9868b; color: #fff; font-weight: 900; font-size: 11px;
+      box-shadow: 0 10px 22px rgba(150,42,48,.16); cursor: grab;
       touch-action: none;
     }
-    .ai-chat-launch.hidden-dock { opacity: .18; transform: scale(.82); }
+    .ai-chat-launch:active { cursor: grabbing; }
+    .ai-chat-launch.hidden-dock { display: none; }
+    .ai-drag-mask {
+      position: fixed; inset: 0; z-index: 90; display: none;
+      background: rgba(15, 23, 42, .10); pointer-events: none;
+    }
+    .ai-drag-mask.show { display: block; }
+    .ai-hide-target {
+      position: fixed; left: 50%; bottom: 28px; z-index: 145;
+      width: 54px; height: 54px; margin-left: -27px; border-radius: 50%;
+      display: none; place-items: center; color: #fff; background: #c62828;
+      border: 2px solid rgba(255,255,255,.78); box-shadow: 0 14px 34px rgba(198,40,40,.28);
+      font-size: 28px; font-weight: 900; pointer-events: none;
+    }
+    .ai-hide-target.show { display: grid; }
+    .ai-hide-target.active { transform: scale(1.08); background: #9f1d1d; }
     .ai-chat { position: fixed; right: 18px; bottom: 132px; z-index: 140; width: min(460px, calc(100vw - 28px)); min-width: 320px; min-height: 300px; display: none; resize: both; overflow: auto; }
     .ai-chat.open { display: block; }
     .ai-chat-card { height: 100%; display: flex; flex-direction: column; background: #fff; border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); overflow: hidden; }
@@ -1172,15 +1187,15 @@
       background: linear-gradient(180deg, rgba(255,247,247,.96), rgba(255,255,255,.86));
     }
     .ai-chat-launch {
-      width: 54px;
-      height: 54px;
-      background: linear-gradient(135deg, #ef2330, #9f1218);
-      box-shadow: 0 18px 40px rgba(215,25,32,.28);
-      transition: transform .18s ease, box-shadow .18s ease;
+      width: 30px;
+      height: 30px;
+      background: #e9868b;
+      box-shadow: 0 10px 22px rgba(150,42,48,.16);
+      transition: transform .16s ease, box-shadow .16s ease, opacity .16s ease;
     }
     .ai-chat-launch:hover {
-      transform: translateY(-2px) scale(1.03);
-      box-shadow: 0 24px 52px rgba(215,25,32,.34);
+      transform: translateY(-1px) scale(1.02);
+      box-shadow: 0 14px 28px rgba(150,42,48,.22);
     }
     canvas.chart {
       border-color: rgba(126, 31, 39, .10);
@@ -1363,6 +1378,8 @@
     </div>
   </div>
   <button class="ai-chat-launch" id="aiChatLaunch" onclick="handleAIChatLaunchClick(event)" title="Ctrl+Shift+A">AI</button>
+  <div class="ai-drag-mask" id="aiDragMask"></div>
+  <div class="ai-hide-target" id="aiHideTarget">×</div>
   <div class="ai-chat" id="aiChat">
     <div class="ai-chat-card">
       <div class="ai-chat-head">
@@ -2001,7 +2018,7 @@
     }
     function clampAIChatLaunchLayout(layout) {
       const margin = 6;
-      const size = 34;
+      const size = 30;
       const maxLeft = Math.max(margin, window.innerWidth - size - margin);
       const maxTop = Math.max(margin, window.innerHeight - size - margin);
       return {
@@ -2034,6 +2051,22 @@
       localStorage.setItem('quant_ai_chat_launch_layout', JSON.stringify(state.aiChatLaunchLayout));
       applyAIChatLaunchLayout();
     }
+    function setAIChatLaunchDragUi(show, active = false) {
+      document.getElementById('aiDragMask')?.classList.toggle('show', !!show);
+      const target = document.getElementById('aiHideTarget');
+      if (target) {
+        target.classList.toggle('show', !!show);
+        target.classList.toggle('active', !!active);
+      }
+    }
+    function isOverAIHideTarget(event) {
+      const target = document.getElementById('aiHideTarget');
+      if (!target) return false;
+      const rect = target.getBoundingClientRect();
+      const pad = 16;
+      return event.clientX >= rect.left - pad && event.clientX <= rect.right + pad
+        && event.clientY >= rect.top - pad && event.clientY <= rect.bottom + pad;
+    }
     function handleAIChatLaunchClick(event) {
       if (state.aiChatLaunchDragging?.moved) {
         event.preventDefault();
@@ -2054,8 +2087,17 @@
       const btn = document.getElementById('aiChatLaunch');
       if (!btn) return;
       btn.addEventListener('pointerdown', (event) => {
+        if (event.button !== undefined && event.button !== 0) return;
+        event.preventDefault();
         const rect = btn.getBoundingClientRect();
-        state.aiChatLaunchDragging = { dx: event.clientX - rect.left, dy: event.clientY - rect.top, moved: false };
+        state.aiChatLaunchDragging = {
+          dx: event.clientX - rect.left,
+          dy: event.clientY - rect.top,
+          moved: false,
+          overHide: false,
+          startX: event.clientX,
+          startY: event.clientY
+        };
         btn.setPointerCapture?.(event.pointerId);
       });
       btn.addEventListener('pointermove', (event) => {
@@ -2066,19 +2108,31 @@
           top: event.clientY - drag.dy,
           hidden: false
         });
-        if (Math.abs(next.left - (state.aiChatLaunchLayout?.left || 0)) > 2 || Math.abs(next.top - (state.aiChatLaunchLayout?.top || 0)) > 2) {
+        if (Math.abs(event.clientX - drag.startX) > 4 || Math.abs(event.clientY - drag.startY) > 4) {
           drag.moved = true;
         }
-        const nearEdge = next.left < 12 || next.top < 12 || next.left > window.innerWidth - 46 || next.top > window.innerHeight - 46;
-        state.aiChatLaunchLayout = { ...next, hidden: nearEdge };
+        drag.overHide = isOverAIHideTarget(event);
+        setAIChatLaunchDragUi(drag.moved, drag.overHide);
+        state.aiChatLaunchLayout = { ...next, hidden: false };
         applyAIChatLaunchLayout();
       });
-      btn.addEventListener('pointerup', () => {
+      btn.addEventListener('pointerup', (event) => {
         if (!state.aiChatLaunchDragging) return;
-        const moved = !!state.aiChatLaunchDragging.moved;
+        const drag = state.aiChatLaunchDragging;
+        const moved = !!drag.moved;
+        if (drag.overHide || isOverAIHideTarget(event)) {
+          state.aiChatLaunchLayout = { ...(state.aiChatLaunchLayout || {}), hidden: true };
+          toggleAIChat(false);
+        }
+        setAIChatLaunchDragUi(false, false);
         state.aiChatLaunchDragging = moved ? { moved: true } : null;
         saveAIChatLaunchLayout();
         setTimeout(() => { if (state.aiChatLaunchDragging?.moved) state.aiChatLaunchDragging = null; }, 0);
+      });
+      btn.addEventListener('pointercancel', () => {
+        setAIChatLaunchDragUi(false, false);
+        state.aiChatLaunchDragging = null;
+        saveAIChatLaunchLayout();
       });
       window.addEventListener('resize', () => {
         state.aiChatLaunchLayout = clampAIChatLaunchLayout(state.aiChatLaunchLayout || {});
