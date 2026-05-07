@@ -32,6 +32,9 @@ BASE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__
 ARTIFACT_DIR = os.path.join(BASE_DIR, "artifacts")
 JOBS: dict = {}
 JOBS_LOCK = threading.Lock()
+JOBS_LOADED = False
+JOB_THREADS: set[str] = set()
+SITE_TASK_AI_WAIT_SECONDS = 25
 
 
 def _now() -> str:
@@ -67,6 +70,55 @@ def _json_safe(value):
         if isinstance(value, (list, tuple)):
             return [_json_safe(v) for v in value]
         return str(value)
+
+
+def _jobs_path() -> str:
+    return os.path.join(BASE_DIR, "jobs.json")
+
+
+def _load_jobs_unlocked():
+    global JOBS_LOADED, JOBS
+    if JOBS_LOADED:
+        return
+    path = _jobs_path()
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                rows = json.load(f)
+            if isinstance(rows, dict):
+                rows = list(rows.values())
+            JOBS = {str(item.get("job_id")): item for item in (rows or []) if item.get("job_id")}
+        except Exception:
+            JOBS = {}
+    JOBS_LOADED = True
+
+
+def _persist_jobs_unlocked():
+    os.makedirs(BASE_DIR, exist_ok=True)
+    rows = sorted(JOBS.values(), key=lambda x: x.get("updated_at", ""), reverse=True)[:100]
+    path = _jobs_path()
+    tmp_path = f"{path}.tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(rows, f, ensure_ascii=False, indent=2)
+    os.replace(tmp_path, path)
+
+
+def _ensure_job_thread(job_id: str):
+    with JOBS_LOCK:
+        _load_jobs_unlocked()
+        job = JOBS.get(job_id)
+        if not job or job.get("status") != "running" or job_id in JOB_THREADS:
+            return
+        JOB_THREADS.add(job_id)
+    threading.Thread(target=_run_site_report_task_thread, args=(job_id,), daemon=True).start()
+
+
+def _run_site_report_task_thread(job_id: str):
+    try:
+        _run_site_report_task(job_id)
+    finally:
+        with JOBS_LOCK:
+            JOB_THREADS.discard(job_id)
 
 
 def classify_task(message: str) -> dict:
@@ -315,7 +367,9 @@ def start_task(message: str, payload: Optional[dict] = None) -> dict:
         "error": "",
     }
     with JOBS_LOCK:
+        _load_jobs_unlocked()
         JOBS[job_id] = job
+        _persist_jobs_unlocked()
 
     agent_workspace.start_task(
         "decision",
@@ -325,15 +379,20 @@ def start_task(message: str, payload: Optional[dict] = None) -> dict:
         task_id=job_id,
         related_agents=["data", "news", "technical", "capital", "sentiment", "risk", "review"],
     )
-    threading.Thread(target=_run_site_report_task, args=(job_id,), daemon=True).start()
+    _ensure_job_thread(job_id)
     return {"ok": True, "job": _safe_job(job), "intent": intent}
 
 
 def get_job(job_id: str) -> dict:
     with JOBS_LOCK:
+        _load_jobs_unlocked()
         job = JOBS.get(job_id)
     if not job:
         return {"ok": False, "error": "任务不存在或服务已重启。", "job_id": job_id}
+    if job.get("status") == "running":
+        _ensure_job_thread(job_id)
+        with JOBS_LOCK:
+            job = JOBS.get(job_id) or job
     return {"ok": True, "job": _safe_job(job)}
 
 
@@ -347,6 +406,7 @@ def _update_job(job_id: str, stage: str, message: str, current: int):
         job["updated_at"] = _now()
         job["progress"] = {"current": current, "total": 5}
         JOBS[job_id] = job
+        _persist_jobs_unlocked()
     agent_workspace.update_task(job_id, stage=stage, message=message, progress={"current": current, "total": 5})
 
 
@@ -362,7 +422,9 @@ def _finish_job(job_id: str, status: str, message: str, result: Optional[dict] =
         job["updated_at"] = job["finished_at"]
         job["result"] = result or {}
         job["error"] = error
+        job["progress"] = {"current": 5, "total": 5}
         JOBS[job_id] = job
+        _persist_jobs_unlocked()
     agent_workspace.finish_task(job_id, status="done" if status == "done" else "failed", message=message, result=result, error=error)
 
 
@@ -574,13 +636,37 @@ def summarize_site_context(context: dict, job_payload: dict, task_type: str) -> 
             "涉及交易必须声明这只是研究和模拟盘参考，不能跳过风控复核。"
         )
     user_message = f"用户任务：{user_task}\n请直接完成任务并生成可发送报告正文。"
-    answer, meta = ai_model_service.chat_text("industry_report", system_prompt, user_message, context)
+    answer, meta = _chat_text_with_task_timeout("industry_report", system_prompt, user_message, context)
     if not meta.get("ok"):
         answer = _fallback_markdown_report(context, meta.get("error", "AI未完成"), target_count=target_count, task_type=task_type)
     markdown = answer.strip()
     if not markdown.startswith("#"):
         markdown = "# 量化智能猎人站内AI任务报告\n\n" + markdown
     return markdown, meta
+
+
+def _chat_text_with_task_timeout(task_key: str, system_prompt: str, user_message: str, context: dict) -> tuple[str, dict]:
+    box = {"done": False, "answer": "", "meta": {}}
+
+    def runner():
+        try:
+            answer, meta = ai_model_service.chat_text(task_key, system_prompt, user_message, context)
+            box.update({"done": True, "answer": answer, "meta": meta})
+        except Exception as exc:
+            box.update({"done": True, "answer": "", "meta": {"ok": False, "used_ai": False, "error": str(exc)}})
+
+    thread = threading.Thread(target=runner, daemon=True)
+    thread.start()
+    thread.join(SITE_TASK_AI_WAIT_SECONDS)
+    if not box.get("done"):
+        return "", {
+            "ok": False,
+            "used_ai": False,
+            "task_key": task_key,
+            "error": f"站内任务报告AI总结超过 {SITE_TASK_AI_WAIT_SECONDS} 秒，已改用本地结构化报告兜底。",
+            "timeout_seconds": SITE_TASK_AI_WAIT_SECONDS,
+        }
+    return box.get("answer") or "", box.get("meta") or {}
 
 
 def _fallback_markdown_report(context: dict, reason: str, target_count: int = 3, task_type: str = "site_report") -> str:
