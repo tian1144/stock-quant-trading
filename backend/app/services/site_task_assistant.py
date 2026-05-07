@@ -536,13 +536,52 @@ def send_email_with_attachment(to_email: str, subject: str, body: str, attachmen
     msg.set_content((body or "")[:4000])
     with open(attachment_path, "rb") as f:
         msg.add_attachment(f.read(), maintype="application", subtype="pdf", filename=os.path.basename(attachment_path))
-    if use_tls:
-        with smtplib.SMTP_SSL(host, port, timeout=30) as smtp:
-            smtp.login(user, password)
-            smtp.send_message(msg)
-    else:
-        with smtplib.SMTP(host, port, timeout=30) as smtp:
-            smtp.starttls()
-            smtp.login(user, password)
-            smtp.send_message(msg)
-    return {"requested": True, "sent": True, "message": f"已发送到 {_mask_email(to_email)}。"}
+    try:
+        if use_tls:
+            with smtplib.SMTP_SSL(host, port, timeout=30) as smtp:
+                smtp.login(user, password)
+                smtp.send_message(msg)
+        else:
+            with smtplib.SMTP(host, port, timeout=30) as smtp:
+                smtp.starttls()
+                smtp.login(user, password)
+                smtp.send_message(msg)
+        return {"requested": True, "sent": True, "message": f"已发送到 {_mask_email(to_email)}。"}
+    except smtplib.SMTPRecipientsRefused:
+        return {
+            "requested": True,
+            "sent": False,
+            "message": f"PDF已生成，但收件邮箱 {_mask_email(to_email)} 被邮件服务器拒收。请检查邮箱地址是否存在、是否拼写正确。",
+        }
+    except smtplib.SMTPAuthenticationError:
+        return {
+            "requested": True,
+            "sent": False,
+            "message": "PDF已生成，但发件邮箱认证失败。请检查SMTP授权码是否过期或被重置。",
+        }
+    except smtplib.SMTPException as exc:
+        return {
+            "requested": True,
+            "sent": False,
+            "message": f"PDF已生成，但邮件发送失败：{_friendly_smtp_error(exc)}",
+        }
+    except Exception as exc:
+        return {
+            "requested": True,
+            "sent": False,
+            "message": f"PDF已生成，但邮件发送异常：{_friendly_smtp_error(exc)}",
+        }
+
+
+def _friendly_smtp_error(exc: Exception) -> str:
+    text = str(exc or "")
+    lowered = text.lower()
+    if "recipient may contain a non-existent account" in lowered or "recipient" in lowered and "non-existent" in lowered:
+        return "收件邮箱可能不存在，请检查邮箱地址。"
+    if "authentication" in lowered or "auth" in lowered:
+        return "发件邮箱认证失败，请检查SMTP授权码。"
+    if "timed out" in lowered or "timeout" in lowered:
+        return "连接邮件服务器超时，请稍后重试。"
+    if "connection" in lowered:
+        return "连接邮件服务器失败，请检查网络或SMTP配置。"
+    return text[:180] or "未知邮件错误。"

@@ -2093,7 +2093,7 @@
         showAIChatLaunch();
         applyAIChatLayout();
         if (!state.aiChat.messages.length) {
-          state.aiChat.messages.push({ role: 'assistant', text: '我在。可以直接让我执行站内任务，比如“总结今年6月最值得投资的三支股票并发送至 xxx@xxx.com”，我会自己收集站内信息、生成报告并按配置发送。' });
+          state.aiChat.messages.push({ role: 'assistant', text: '您好，您有什么想要了解的吗？' });
           renderAIChat();
         }
         setTimeout(() => document.getElementById('aiChatInput')?.focus(), 0);

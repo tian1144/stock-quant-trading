@@ -50,7 +50,7 @@ DEFAULT_USERS = [
         "phone": "123123123",
         "name": "只读访问账号",
         "role": ROLE_VISITOR,
-        "password": "123123@！",
+        "password": "123123@!",
     },
 ]
 
@@ -143,7 +143,7 @@ def init_auth_store():
             if user.get("role") == ROLE_VISITOR and user.get("phone") != "123123123":
                 user["phone"] = "123123123"
                 user["name"] = "只读访问账号"
-                user["password_hash"] = _hash_password("123123@！")
+                user["password_hash"] = _hash_password("123123@!")
                 user["updated_at"] = _now()
         existing = {u.get("phone"): u for u in users.get("users", [])}
         for seed in DEFAULT_USERS:
