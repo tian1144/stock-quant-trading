@@ -7,7 +7,9 @@ future holaOS handoff points for each quant Agent.
 """
 import json
 import os
+import re
 import time
+import uuid
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -17,6 +19,7 @@ from app.execution.kill_switch import get_kill_switch_status
 
 BASE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "data", "agents")
 MAX_MEMORY_LOGS = 80
+MAX_TASKS = 200
 
 
 AGENTS: Dict[str, dict] = {
@@ -33,6 +36,27 @@ AGENTS: Dict[str, dict] = {
         "artifact": "event_stream.json",
         "handoff": "agents/news/state.json",
         "guardrail": "事件需带来源和时间，避免把未来新闻灌入历史回测",
+    },
+    "technical": {
+        "name": "技术 Agent",
+        "role": "K线形态、支撑压力、趋势、量价结构分析",
+        "artifact": "technical_view.json",
+        "handoff": "agents/technical/state.json",
+        "guardrail": "只输出技术证据，不单独决定买卖",
+    },
+    "capital": {
+        "name": "资金 Agent",
+        "role": "主力资金、板块资金、龙虎榜、游资行为归因",
+        "artifact": "capital_flow.json",
+        "handoff": "agents/capital/state.json",
+        "guardrail": "资金信号必须与结构、风控共同确认",
+    },
+    "sentiment": {
+        "name": "情绪 Agent",
+        "role": "情绪周期、涨跌停温度、主线板块和仓位温度",
+        "artifact": "sentiment_phase.json",
+        "handoff": "agents/sentiment/state.json",
+        "guardrail": "情绪过热时只能降级，不能放大仓位",
     },
     "score": {
         "name": "评分 Agent",
@@ -62,9 +86,17 @@ AGENTS: Dict[str, dict] = {
         "handoff": "agents/execution/state.json",
         "guardrail": "真实交易 API 默认关闭，仅允许模拟交易",
     },
+    "review": {
+        "name": "复盘 Agent",
+        "role": "模拟盘盈亏复盘、策略记忆沉淀、权重调整建议",
+        "artifact": "review_notes.json",
+        "handoff": "agents/review/state.json",
+        "guardrail": "复盘建议需回测或人工确认后才能进入生产权重",
+    },
 }
 
 _logs: Dict[str, List[dict]] = {agent_id: [] for agent_id in AGENTS}
+_tasks: Dict[str, dict] = {}
 _started_at = time.time()
 
 
@@ -88,14 +120,54 @@ def _log_path(agent_id: str) -> str:
     return os.path.join(_agent_dir(agent_id), "events.jsonl")
 
 
+def _artifact_dir(agent_id: str) -> str:
+    return os.path.join(_agent_dir(agent_id), "artifacts")
+
+
+def _tasks_path() -> str:
+    return os.path.join(BASE_DIR, "tasks.json")
+
+
 def _ensure_agent_dirs():
     for agent_id in AGENTS:
         os.makedirs(_agent_dir(agent_id), exist_ok=True)
+        os.makedirs(_artifact_dir(agent_id), exist_ok=True)
 
 
 def _write_json(path: str, payload: dict):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2)
+
+
+def _safe_payload(payload: Optional[dict]) -> dict:
+    try:
+        json.dumps(payload or {}, ensure_ascii=False)
+        return payload or {}
+    except Exception:
+        return {"repr": repr(payload)}
+
+
+def _load_tasks() -> Dict[str, dict]:
+    global _tasks
+    if _tasks:
+        return _tasks
+    path = _tasks_path()
+    if not os.path.exists(path):
+        return _tasks
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            rows = json.load(f)
+        if isinstance(rows, list):
+            _tasks = {str(item.get("task_id")): item for item in rows if item.get("task_id")}
+    except Exception:
+        _tasks = {}
+    return _tasks
+
+
+def _persist_tasks():
+    _ensure_agent_dirs()
+    rows = sorted(_tasks.values(), key=lambda x: x.get("updated_at", ""), reverse=True)[:MAX_TASKS]
+    _write_json(_tasks_path(), rows)
 
 
 def record_event(agent_id: str, action: str, message: str, level: str = "info", payload: Optional[dict] = None) -> dict:
@@ -110,7 +182,7 @@ def record_event(agent_id: str, action: str, message: str, level: str = "info", 
         "level": level,
         "action": action,
         "message": message,
-        "payload": payload or {},
+        "payload": _safe_payload(payload),
     }
     logs = _logs.setdefault(agent_id, [])
     logs.append(event)
@@ -122,6 +194,117 @@ def record_event(agent_id: str, action: str, message: str, level: str = "info", 
     except Exception:
         pass
     return event
+
+
+def start_task(
+    agent_id: str,
+    task_type: str,
+    title: str,
+    payload: Optional[dict] = None,
+    task_id: Optional[str] = None,
+    related_agents: Optional[List[str]] = None,
+    requires_approval: bool = False,
+) -> dict:
+    """Create or replace a local orchestration task for traceable Agent work."""
+    if agent_id not in AGENTS:
+        agent_id = "data"
+    _load_tasks()
+    task_id = task_id or f"{task_type}-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:6]}"
+    now = _iso()
+    task = {
+        "task_id": task_id,
+        "agent_id": agent_id,
+        "task_type": task_type,
+        "title": title,
+        "status": "running",
+        "stage": "start",
+        "message": title,
+        "created_at": now,
+        "updated_at": now,
+        "finished_at": None,
+        "payload": _safe_payload(payload),
+        "progress": {},
+        "related_agents": [a for a in (related_agents or []) if a in AGENTS],
+        "requires_approval": bool(requires_approval),
+        "artifacts": [],
+        "error": None,
+    }
+    _tasks[task_id] = task
+    _persist_tasks()
+    record_event(agent_id, f"{task_type}_start", title, payload={"task_id": task_id, **_safe_payload(payload)})
+    return task.copy()
+
+
+def update_task(
+    task_id: str,
+    status: Optional[str] = None,
+    stage: Optional[str] = None,
+    message: Optional[str] = None,
+    progress: Optional[dict] = None,
+    agent_id: Optional[str] = None,
+    payload: Optional[dict] = None,
+) -> dict:
+    _load_tasks()
+    task = _tasks.get(task_id)
+    if not task:
+        task = start_task(agent_id or "data", "ad_hoc", f"恢复外部任务 {task_id}", task_id=task_id)
+    if status:
+        task["status"] = status
+    if stage:
+        task["stage"] = stage
+    if message:
+        task["message"] = message
+    if progress is not None:
+        task["progress"] = _safe_payload(progress)
+    if payload is not None:
+        merged = task.get("payload") if isinstance(task.get("payload"), dict) else {}
+        merged.update(_safe_payload(payload))
+        task["payload"] = merged
+    task["updated_at"] = _iso()
+    _tasks[task_id] = task
+    _persist_tasks()
+    return task.copy()
+
+
+def finish_task(task_id: str, status: str = "done", message: Optional[str] = None, result: Optional[dict] = None, error: Optional[str] = None) -> dict:
+    _load_tasks()
+    task = _tasks.get(task_id)
+    if not task:
+        task = start_task("data", "ad_hoc", f"完成外部任务 {task_id}", task_id=task_id)
+    task["status"] = status
+    task["stage"] = status
+    task["message"] = message or task.get("message") or status
+    task["result"] = _safe_payload(result)
+    task["error"] = error
+    task["finished_at"] = _iso()
+    task["updated_at"] = task["finished_at"]
+    _tasks[task_id] = task
+    _persist_tasks()
+    level = "error" if status == "failed" else ("warn" if status in {"blocked", "cancelled"} else "info")
+    record_event(task.get("agent_id", "data"), f"{task.get('task_type', 'task')}_{status}", task["message"], level=level, payload={"task_id": task_id, "error": error, "result": _safe_payload(result)})
+    return task.copy()
+
+
+def write_artifact(agent_id: str, name: str, payload: dict, task_id: Optional[str] = None) -> str:
+    if agent_id not in AGENTS:
+        agent_id = "data"
+    _ensure_agent_dirs()
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", name or "artifact.json")
+    if not safe_name.endswith(".json"):
+        safe_name += ".json"
+    path = os.path.join(_artifact_dir(agent_id), safe_name)
+    _write_json(path, _safe_payload(payload))
+    if task_id:
+        _load_tasks()
+        task = _tasks.get(task_id)
+        if task is not None:
+            artifacts = task.setdefault("artifacts", [])
+            if path not in artifacts:
+                artifacts.append(path)
+            task["updated_at"] = _iso()
+            _tasks[task_id] = task
+            _persist_tasks()
+    return path
 
 
 def _load_tail(agent_id: str, limit: int) -> List[dict]:
@@ -171,6 +354,29 @@ def _agent_metrics(agent_id: str) -> dict:
             "负面池": len(state_store.get_negative_news()),
             "最近刷新秒": _age_seconds(state_store.get_news_updated_at()),
         }
+    if agent_id == "technical":
+        results = state_store.get_screening_results()
+        support_count = sum(1 for item in results if ((item.get("screening_logic") or {}).get("support_pool") or {}).get("status") == "support_pool")
+        return {
+            "技术候选": len(results),
+            "支撑池": support_count,
+            "最近选股秒": _age_seconds(state_store.get_screening_updated_at()),
+        }
+    if agent_id == "capital":
+        sectors = state_store.get_sector_list()
+        return {
+            "板块数": len(sectors),
+            "资金流事件": len(state_store.get_sector_flow_history() if hasattr(state_store, "get_sector_flow_history") else []),
+            "主力跟踪": len(state_store.get_screening_results()),
+        }
+    if agent_id == "sentiment":
+        news = state_store.get_news()
+        hot_news = [n for n in news if str(n.get("level") or n.get("importance") or "").lower() in {"major", "super_major"}]
+        return {
+            "情绪事件": len(news),
+            "重要事件": len(hot_news),
+            "候选温度": len(state_store.get_screening_results()),
+        }
     if agent_id == "score":
         return {
             "候选数": len(state_store.get_screening_results()),
@@ -198,6 +404,17 @@ def _agent_metrics(agent_id: str) -> dict:
             "订单数": len(state_store.get_orders()),
             "可用资金": round(state_store.get_portfolio().get("available_cash", 0), 2),
         }
+    if agent_id == "review":
+        memory = {}
+        try:
+            memory = state_store.get_ai_recommendations() or {}
+        except Exception:
+            memory = {}
+        return {
+            "复核池": len(memory.get("reviewed_candidates") or []),
+            "推荐记录": len(memory.get("recommendations") or []),
+            "学习入口": "已接入",
+        }
     return {}
 
 
@@ -212,6 +429,9 @@ def _agent_status(agent_id: str) -> dict:
     elif agent_id == "news":
         has_data = metrics.get("事件数", 0) > 0
         stale = bool(metrics.get("最近刷新秒") and metrics["最近刷新秒"] > 3600)
+    elif agent_id in {"technical", "capital", "sentiment"}:
+        has_data = any(v for v in metrics.values() if isinstance(v, (int, float)) and v > 0)
+        stale = False
     elif agent_id == "score":
         has_data = metrics.get("候选数", 0) > 0
         stale = False
@@ -225,7 +445,10 @@ def _agent_status(agent_id: str) -> dict:
         has_data = metrics.get("订单数", 0) > 0 or metrics.get("持仓数", 0) > 0
         stale = False
 
+    active_task = _active_task_for_agent(agent_id)
     status = _status_level(has_data, blocked=blocked, stale=stale)
+    if active_task and status != "blocked":
+        status = "running"
     logs = _load_tail(agent_id, 6)
     last_log = logs[-1] if logs else None
     return {
@@ -243,7 +466,22 @@ def _agent_status(agent_id: str) -> dict:
         "state_file": _state_path(agent_id),
         "log_file": _log_path(agent_id),
         "logs": logs,
+        "active_task": active_task,
     }
+
+
+def _active_task_for_agent(agent_id: str) -> Optional[dict]:
+    tasks = _load_tasks()
+    active = [
+        task for task in tasks.values()
+        if task.get("agent_id") == agent_id and task.get("status") in {"queued", "running"}
+    ]
+    active.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
+    if not active:
+        return None
+    task = active[0].copy()
+    task.pop("result", None)
+    return task
 
 
 def snapshot_all(reason: str = "manual") -> dict:
@@ -258,6 +496,7 @@ def snapshot_all(reason: str = "manual") -> dict:
             "status_text": status["status_text"],
             "metrics": status["metrics"],
             "last_event": status["last_event"],
+            "active_task": status.get("active_task"),
             "updated_at": _iso(),
             "snapshot_reason": reason,
         }
@@ -268,15 +507,28 @@ def snapshot_all(reason: str = "manual") -> dict:
         "runtime": "local_h5_agent_workspace",
         "uptime_seconds": int(time.time() - _started_at),
         "holaos_ready": True,
+        "orchestrator": {
+            "runtime": "local_agent_orchestrator",
+            "production_ready": False,
+            "handoff_ready": True,
+            "task_count": len(_load_tasks()),
+            "active_task_count": len([t for t in _load_tasks().values() if t.get("status") in {"queued", "running"}]),
+            "task_store": _tasks_path(),
+        },
         "agents": agents,
         "pipeline": [
             "数据采集",
             "新闻理解",
+            "技术结构",
+            "资金归因",
+            "情绪周期",
             "评分归因",
             "结构化决策",
             "风控否决",
             "模拟执行",
+            "复盘学习",
         ],
+        "tasks": get_tasks(limit=20)["tasks"],
         "storage_root": BASE_DIR,
     }
 
@@ -295,9 +547,31 @@ def get_agent_logs(agent_id: Optional[str] = None, limit: int = 50) -> dict:
     return {"logs": logs[-limit:]}
 
 
+def get_tasks(agent_id: Optional[str] = None, status: Optional[str] = None, limit: int = 50) -> dict:
+    tasks = list(_load_tasks().values())
+    if agent_id:
+        tasks = [task for task in tasks if task.get("agent_id") == agent_id]
+    if status:
+        tasks = [task for task in tasks if task.get("status") == status]
+    tasks.sort(key=lambda x: x.get("updated_at", ""), reverse=True)
+    compact = []
+    for task in tasks[:limit]:
+        row = task.copy()
+        if isinstance(row.get("result"), dict):
+            row["result_summary"] = {
+                k: row["result"].get(k)
+                for k in ("count", "signal_count", "recommendations", "error", "message")
+                if k in row["result"]
+            }
+            row.pop("result", None)
+        compact.append(row)
+    return {"tasks": compact}
+
+
 def bootstrap_logs():
     if any(_logs.values()):
         return
     record_event("data", "startup", "Agent 工作台已启动，等待行情与股票池刷新。")
     record_event("news", "startup", "新闻 Agent 已就绪，等待事件流刷新。")
     record_event("risk", "startup", "风控 Agent 已就绪，真实交易接口保持关闭。")
+    record_event("execution", "startup", "本地编排器已就绪，执行 Agent 默认仅处理模拟盘。")

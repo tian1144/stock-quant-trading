@@ -29,7 +29,12 @@ HEADERS = {
 }
 
 DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "data"))
-MARKET_CACHE_DIR = os.environ.get("LIANGHUA_MARKET_CACHE_DIR") or r"E:\lianghua_market_cache"
+DEFAULT_MARKET_CACHE_DIR = (
+    r"E:\lianghua_market_cache"
+    if os.name == "nt"
+    else os.path.join(DATA_DIR, "market_cache")
+)
+MARKET_CACHE_DIR = os.environ.get("LIANGHUA_MARKET_CACHE_DIR") or DEFAULT_MARKET_CACHE_DIR
 KLINE_CACHE_DIR = os.path.join(MARKET_CACHE_DIR, "kline")
 INTRADAY_CACHE_DIR = os.path.join(MARKET_CACHE_DIR, "intraday")
 REALTIME_CACHE_DIR = os.path.join(MARKET_CACHE_DIR, "realtime")

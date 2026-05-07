@@ -92,15 +92,26 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--job-id", required=True)
     parser.add_argument("--strategy", default="")
+    parser.add_argument("--task-id", default="")
     args = parser.parse_args()
 
     started = time.time()
     strategy = args.strategy if args.strategy in ("short", "long", "event_driven") else None
+    task_id = args.task_id or args.job_id
     job = _read_job(args.job_id) or {
         "job_id": args.job_id,
+        "task_id": task_id,
         "created_at": _now(),
-        "params": {"strategy": strategy},
+        "params": {"strategy": strategy, "task_id": task_id},
     }
+    agent_workspace.start_task(
+        "score",
+        "screening",
+        "后台智能选股",
+        payload={"job_id": args.job_id, "strategy": strategy},
+        task_id=task_id,
+        related_agents=["data", "technical", "capital", "sentiment", "decision", "risk"],
+    )
     job.update({
         "status": "running",
         "stage": "prepare",
@@ -127,10 +138,28 @@ def main() -> int:
         def progress_callback(progress: dict):
             job.update(progress or {})
             _write_job(job)
+            agent_workspace.update_task(
+                task_id,
+                stage=(progress or {}).get("stage"),
+                message=(progress or {}).get("message"),
+                progress=progress or {},
+            )
 
         results = stock_screener.run_screening(strategy=strategy, progress_callback=progress_callback)
         state_store.update_system_state({"last_screening_time": _now()})
         agent_workspace.record_event("score", "screening", f"后台选股完成：{len(results)} 个候选。")
+        agent_workspace.write_artifact(
+            "score",
+            f"{task_id}_screening_result.json",
+            {
+                "job_id": args.job_id,
+                "strategy": strategy,
+                "count": len(results),
+                "logic": stock_screener.get_screening_logic_summary(),
+                "sample": _json_safe(results[:20]),
+            },
+            task_id=task_id,
+        )
         result = {
             "message": "选股完成",
             "count": len(results),
@@ -147,6 +176,12 @@ def main() -> int:
             "finished_at": _now(),
         })
         _write_job(job)
+        agent_workspace.finish_task(
+            task_id,
+            status="done",
+            message=f"智能选股完成：{len(results)}只候选",
+            result={"count": len(results), "elapsed_seconds": round(time.time() - started, 1)},
+        )
         return 0
     except Exception as exc:
         job.update({
@@ -157,6 +192,7 @@ def main() -> int:
             "finished_at": _now(),
         })
         _write_job(job)
+        agent_workspace.finish_task(task_id, status="failed", message=f"智能选股失败：{exc}", error=str(exc))
         return 1
 
 

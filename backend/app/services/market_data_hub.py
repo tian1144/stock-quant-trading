@@ -196,7 +196,7 @@ def build_priority_queues(
     queues = {
         "first": first,
         "second": [c for c in second if c not in set(first)],
-        "third_sample": [c for c in third if c not in set(first)][:500],
+        "third_sample": [c for c in third if c not in set(first)],
         "counts": {"first": len(first), "second": len(second), "third": len(third)},
         "updated_at": _now_text(),
     }

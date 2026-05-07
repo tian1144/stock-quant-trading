@@ -187,6 +187,10 @@ _market_data_hub_job = {
     "last_intraday_run_at": None,
     "last_universe_open_date": None,
     "last_universe_close_date": None,
+    "realtime_cursor": 0,
+    "realtime_full_cycle_count": 0,
+    "last_realtime_total": 0,
+    "last_realtime_slice": "",
     "message": "行情数据引入中枢等待调度",
 }
 
@@ -298,6 +302,28 @@ def _load_stock_universe_fast(force_refresh: bool = False) -> list:
     return stocks
 
 
+def _merge_realtime_cache_for_stocks(stocks: list) -> list:
+    merged = []
+    for stock in stocks or []:
+        item = dict(stock or {})
+        code = str(item.get("code", "")).strip()
+        if code:
+            realtime = data_fetcher.read_realtime_cache(code) or {}
+            if realtime:
+                item.update({
+                    "name": item.get("name") or realtime.get("name", ""),
+                    "price": realtime.get("price") or realtime.get("current_price") or item.get("price", 0),
+                    "pct_change": realtime.get("pct_change", item.get("pct_change", 0)),
+                    "amount": realtime.get("amount", item.get("amount", 0)),
+                    "volume": realtime.get("volume", item.get("volume", 0)),
+                    "source": realtime.get("source", item.get("source", "cache_file")),
+                    "validation_status": realtime.get("validation_status", item.get("validation_status", "cache")),
+                    "updated_at": realtime.get("cached_at") or item.get("updated_at"),
+                })
+        merged.append(item)
+    return merged
+
+
 def _update_screening_job(job_id: str, **updates):
     with _screening_jobs_lock:
         job = _screening_jobs.get(job_id) or {}
@@ -349,6 +375,15 @@ def _recent_running_screening_job() -> dict | None:
 def _run_screening_job(job_id: str, params: dict):
     started = time.time()
     strategy = params.get("strategy")
+    task_id = params.get("task_id") or job_id
+    agent_workspace.start_task(
+        "score",
+        "screening",
+        "后台智能选股",
+        payload={"job_id": job_id, "strategy": strategy},
+        task_id=task_id,
+        related_agents=["data", "technical", "capital", "sentiment", "decision", "risk"],
+    )
     _update_screening_job(
         job_id,
         status="running",
@@ -375,6 +410,12 @@ def _run_screening_job(job_id: str, params: dict):
         )
         def progress_callback(progress: dict):
             _update_screening_job(job_id, **(progress or {}))
+            agent_workspace.update_task(
+                task_id,
+                stage=(progress or {}).get("stage"),
+                message=(progress or {}).get("message"),
+                progress=progress or {},
+            )
 
         results = stock_screener.run_screening(
             strategy=strategy if strategy in ("short", "long", "event_driven") else None,
@@ -384,6 +425,18 @@ def _run_screening_job(job_id: str, params: dict):
             "last_screening_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         })
         agent_workspace.record_event("score", "screening", f"后台选股完成：{len(results)} 个候选。")
+        agent_workspace.write_artifact(
+            "score",
+            f"{task_id}_screening_result.json",
+            {
+                "job_id": job_id,
+                "strategy": strategy,
+                "count": len(results),
+                "logic": stock_screener.get_screening_logic_summary(),
+                "sample": _json_safe(results[:20]),
+            },
+            task_id=task_id,
+        )
         result = {
             "message": "选股完成",
             "count": len(results),
@@ -400,6 +453,12 @@ def _run_screening_job(job_id: str, params: dict):
             result=result,
             finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         )
+        agent_workspace.finish_task(
+            task_id,
+            status="done",
+            message=f"智能选股完成：{len(results)}只候选",
+            result={"count": len(results), "elapsed_seconds": round(time.time() - started, 1)},
+        )
     except Exception as exc:
         logger.exception("screening job failed")
         _update_screening_job(
@@ -410,9 +469,19 @@ def _run_screening_job(job_id: str, params: dict):
             error=str(exc),
             finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         )
+        agent_workspace.finish_task(task_id, status="failed", message=f"智能选股失败：{exc}", error=str(exc))
 
 
 def _run_disclosure_backfill(params: dict):
+    task_id = params.get("task_id") or f"disclosure-{int(time.time())}"
+    agent_workspace.start_task(
+        "news",
+        "disclosure_backfill",
+        "公告/财报风险缓存回填",
+        payload=params,
+        task_id=task_id,
+        related_agents=["risk"],
+    )
     stocks = _load_stock_universe_fast(force_refresh=bool(params.get("force_universe_refresh")))
     limit = int(params.get("limit") or 0)
     offset = int(params.get("offset") or 0)
@@ -458,6 +527,19 @@ def _run_disclosure_backfill(params: dict):
                     errors.append({"code": code, "error": str(exc)})
             finally:
                 _disclosure_backfill_job["done"] += 1
+                if _disclosure_backfill_job["done"] % 20 == 0 or _disclosure_backfill_job["done"] == len(selected):
+                    agent_workspace.update_task(
+                        task_id,
+                        stage="backfill",
+                        message=f"公告回填进度：{_disclosure_backfill_job['done']}/{len(selected)}",
+                        progress={
+                            "total": len(selected),
+                            "done": _disclosure_backfill_job["done"],
+                            "success": _disclosure_backfill_job["success"],
+                            "failed": _disclosure_backfill_job["failed"],
+                            "risk_hits": _disclosure_backfill_job["risk_hits"],
+                        },
+                    )
                 if sleep_seconds > 0:
                     time.sleep(sleep_seconds)
         _disclosure_backfill_job["message"] = "正式公告/财报风险缓存回填完成"
@@ -467,6 +549,19 @@ def _run_disclosure_backfill(params: dict):
         _disclosure_backfill_job["running"] = False
         _disclosure_backfill_job["finished_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         _disclosure_backfill_job["current"] = None
+        agent_workspace.write_artifact("news", f"{task_id}_disclosure_backfill.json", _disclosure_backfill_job.copy(), task_id=task_id)
+        agent_workspace.finish_task(
+            task_id,
+            status="done" if "完成" in _disclosure_backfill_job.get("message", "") else "failed",
+            message=_disclosure_backfill_job.get("message"),
+            result={
+                "total": _disclosure_backfill_job.get("total"),
+                "success": _disclosure_backfill_job.get("success"),
+                "failed": _disclosure_backfill_job.get("failed"),
+                "risk_hits": _disclosure_backfill_job.get("risk_hits"),
+            },
+            error=None if "完成" in _disclosure_backfill_job.get("message", "") else _disclosure_backfill_job.get("message"),
+        )
 
 def _fetch_all_stocks_sina():
     """通过新浪API分页获取全部A股数据"""
@@ -775,6 +870,42 @@ def _is_postclose_window(now: datetime) -> bool:
     return 15 * 60 + 3 <= current <= 16 * 60
 
 
+def _build_realtime_refresh_codes(queues: dict, third_limit: int = 700) -> list:
+    first = list(queues.get("first") or [])
+    second = list(queues.get("second") or [])[:300]
+    priority_codes = first + [code for code in second if code not in set(first)]
+    third = [code for code in (queues.get("third_sample") or []) if code not in set(priority_codes)]
+    if not third:
+        _market_data_hub_job.update({
+            "realtime_cursor": 0,
+            "last_realtime_total": len(priority_codes),
+            "last_realtime_slice": "priority_only",
+        })
+        return priority_codes
+
+    cursor = int(_market_data_hub_job.get("realtime_cursor") or 0) % len(third)
+    limit = max(0, min(int(third_limit), len(third)))
+    if cursor + limit <= len(third):
+        sample = third[cursor:cursor + limit]
+        next_cursor = cursor + limit
+    else:
+        tail = third[cursor:]
+        head_count = limit - len(tail)
+        sample = tail + third[:head_count]
+        next_cursor = head_count
+        _market_data_hub_job["realtime_full_cycle_count"] = int(_market_data_hub_job.get("realtime_full_cycle_count") or 0) + 1
+    if next_cursor >= len(third):
+        next_cursor = 0
+        _market_data_hub_job["realtime_full_cycle_count"] = int(_market_data_hub_job.get("realtime_full_cycle_count") or 0) + 1
+
+    _market_data_hub_job.update({
+        "realtime_cursor": next_cursor,
+        "last_realtime_total": len(priority_codes) + len(sample),
+        "last_realtime_slice": f"{sample[0]}-{sample[-1]}" if sample else "none",
+    })
+    return priority_codes + sample
+
+
 def _market_data_hub_loop():
     """统一调度行情数据引入：主数据、实时快照、重点分时和覆盖率队列。"""
     market_data_hub.start_hub()
@@ -796,7 +927,7 @@ def _market_data_hub_loop():
                 market_data_hub.sync_universe(lambda: _load_stock_universe_fast(force_refresh=True))
                 _market_data_hub_job["last_universe_close_date"] = today
             if _is_realtime_window(now):
-                realtime_codes = queues.get("first", []) + queues.get("second", [])[:300] + queues.get("third_sample", [])[:700]
+                realtime_codes = _build_realtime_refresh_codes(queues, third_limit=700)
                 market_data_hub.refresh_realtime(realtime_codes, batch_size=50)
                 if not _market_data_hub_job.get("last_intraday_run_at") or time.time() - _market_data_hub_job.get("last_intraday_ts", 0) >= 30:
                     market_data_hub.refresh_intraday_priority(first_limit=120, second_limit=80)
@@ -861,7 +992,7 @@ async def get_stocks(
 
         all_stocks = _stock_cache["stocks"]
         total = len(all_stocks)
-        paginated_stocks = all_stocks[offset:offset + limit]
+        paginated_stocks = _merge_realtime_cache_for_stocks(all_stocks[offset:offset + limit])
 
         return {"total": total, "stocks": paginated_stocks}
 
@@ -1023,6 +1154,7 @@ async def start_disclosure_backfill(
         "force_refresh": bool(force_refresh),
         "sleep_seconds": max(0.1, min(5.0, float(sleep_seconds or 0.35))),
     }
+    params["task_id"] = f"disclosure-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     threading.Thread(target=_run_disclosure_backfill, args=(params,), daemon=True).start()
     return {
         "status": "started",
@@ -1117,6 +1249,30 @@ async def run_post_close_validation_now():
 async def get_snapshot(stock_code: str):
     """获取单只股票实时行情（同花顺数据源）"""
     _track_realtime_code(stock_code)
+    cached = data_fetcher.read_realtime_cache(stock_code)
+    if cached:
+        threading.Thread(
+            target=lambda: data_fetcher.fetch_verified_realtime_batch([stock_code]),
+            daemon=True,
+        ).start()
+        return {
+            "code": stock_code,
+            "name": cached.get("name", ""),
+            "current_price": cached.get("price") or cached.get("current_price", 0),
+            "open": cached.get("open", 0),
+            "high": cached.get("high", 0),
+            "low": cached.get("low", 0),
+            "pre_close": cached.get("pre_close", 0),
+            "pct_change": cached.get("pct_change", 0),
+            "volume": cached.get("volume", 0),
+            "amount": cached.get("amount", 0),
+            "source": cached.get("source", "cache_file"),
+            "validation_status": cached.get("validation_status", "cache"),
+            "validated_sources": cached.get("validated_sources", []),
+            "updated_at": cached.get("cached_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "cache_hit": True,
+            "background_refresh": True,
+        }
     verified = data_fetcher.fetch_verified_realtime_batch([stock_code]).get(stock_code)
     if verified:
         return {
@@ -1156,10 +1312,34 @@ async def get_snapshots(
     stock_codes = [code.strip() for code in codes.split(",") if code.strip()][:20]
     for code in stock_codes:
         _track_realtime_code(code)
-    verified_batch = data_fetcher.fetch_verified_realtime_batch(stock_codes)
     snapshots = []
-
+    missing_codes = []
     for code in stock_codes:
+        cached = data_fetcher.read_realtime_cache(code)
+        if cached:
+            snapshots.append({
+                "code": code,
+                "name": cached.get("name", ""),
+                "current_price": cached.get("price") or cached.get("current_price", 0),
+                "open": cached.get("open", 0),
+                "volume": cached.get("volume", 0),
+                "amount": cached.get("amount", 0),
+                "source": cached.get("source", "cache_file"),
+                "validation_status": cached.get("validation_status", "cache"),
+                "validated_sources": cached.get("validated_sources", []),
+                "cache_hit": True,
+            })
+        else:
+            missing_codes.append(code)
+    if snapshots:
+        refresh_codes = list(stock_codes)
+        threading.Thread(
+            target=lambda: data_fetcher.fetch_verified_realtime_batch(refresh_codes),
+            daemon=True,
+        ).start()
+    verified_batch = data_fetcher.fetch_verified_realtime_batch(missing_codes) if missing_codes else {}
+
+    for code in missing_codes:
         verified = verified_batch.get(code)
         if verified:
             snapshots.append({
@@ -1246,22 +1426,32 @@ async def start_screening_job(payload: dict | None = Body(default=None)):
             "job": running,
         }
     job_id = f"screening-{int(time.time())}-{len(_screening_jobs) + 1}"
+    task_id = f"screening-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     job = {
         "job_id": job_id,
+        "task_id": task_id,
         "status": "queued",
         "stage": "queued",
         "message": "智能选股任务已进入后台队列",
         "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "params": {"strategy": strategy},
+        "params": {"strategy": strategy, "task_id": task_id},
     }
+    agent_workspace.start_task(
+        "score",
+        "screening",
+        "智能选股任务已排队",
+        payload={"job_id": job_id, "strategy": strategy},
+        task_id=task_id,
+        related_agents=["data", "technical", "capital", "sentiment", "decision", "risk"],
+    )
     with _screening_jobs_lock:
         _screening_jobs[job_id] = job
     _write_screening_job_file(job)
     runner = os.path.join(BACKEND_ROOT, "scripts", "run_screening_job.py")
     try:
         subprocess.Popen(
-            [sys.executable, runner, "--job-id", job_id, "--strategy", strategy or ""],
+            [sys.executable, runner, "--job-id", job_id, "--strategy", strategy or "", "--task-id", task_id],
             cwd=BACKEND_ROOT,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -1279,6 +1469,7 @@ async def start_screening_job(payload: dict | None = Body(default=None)):
         with _screening_jobs_lock:
             _screening_jobs[job_id] = job
         _write_screening_job_file(job)
+        agent_workspace.finish_task(task_id, status="failed", message=job["message"], error=str(exc))
     return {"status": "started", "job_id": job_id, "job": job}
 
 
@@ -1379,6 +1570,7 @@ async def run_ai_signal_pick(payload: dict | None = Body(default=None)):
 
 
 def _run_ai_pick_job(job_id: str, payload: dict):
+    task_id = payload.get("task_id") or job_id
     def update_progress(progress: dict):
         with _ai_pick_jobs_lock:
             job = _ai_pick_jobs.get(job_id) or {}
@@ -1389,6 +1581,12 @@ def _run_ai_pick_job(job_id: str, payload: dict):
                 "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             })
             _ai_pick_jobs[job_id] = job
+        agent_workspace.update_task(
+            task_id,
+            stage=(progress or {}).get("stage"),
+            message=(progress or {}).get("message") or "AI选股运行中",
+            progress=progress or {},
+        )
 
     with _ai_pick_jobs_lock:
         job = _ai_pick_jobs.get(job_id) or {}
@@ -1400,6 +1598,14 @@ def _run_ai_pick_job(job_id: str, payload: dict):
         universe_limit = int(payload.get("universe_limit", 20) or 20)
         scope = payload.get("scope") or "focus"
         focus_codes = payload.get("focus_codes") or []
+        agent_workspace.start_task(
+            "decision",
+            "ai_stock_pick",
+            "AI 全市场/关注池选股复核",
+            payload={"job_id": job_id, "strategy": strategy, "scope": scope, "focus_count": len(focus_codes)},
+            task_id=task_id,
+            related_agents=["score", "technical", "capital", "sentiment", "risk", "execution", "review"],
+        )
         result = ai_stock_picker.run_ai_stock_picking(
             strategy=strategy,
             limit=limit,
@@ -1416,6 +1622,34 @@ def _run_ai_pick_job(job_id: str, payload: dict):
                 "result": result,
                 "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             })
+        agent_workspace.write_artifact(
+            "decision",
+            f"{task_id}_ai_pick_result.json",
+            {
+                "job_id": job_id,
+                "strategy": strategy,
+                "scope": result.get("scope"),
+                "recommendation_count": len(result.get("recommendations") or []),
+                "reviewed_count": len(result.get("reviewed_candidates") or []),
+                "signal_count": result.get("signal_count", 0),
+                "ai_meta": result.get("ai_meta"),
+                "recommendations": result.get("recommendations") or [],
+                "reviewed_sample": (result.get("reviewed_candidates") or [])[:20],
+            },
+            task_id=task_id,
+        )
+        agent_workspace.finish_task(
+            task_id,
+            status=status,
+            message=result.get("error") or f"AI选股完成：推荐{len(result.get('recommendations', []))}只",
+            result={
+                "signal_count": result.get("signal_count", 0),
+                "recommendations": len(result.get("recommendations") or []),
+                "reviewed_candidates": len(result.get("reviewed_candidates") or []),
+                "error": result.get("error"),
+            },
+            error=result.get("error"),
+        )
         agent_workspace.record_event(
             "decision",
             "ai_stock_pick",
@@ -1440,6 +1674,7 @@ def _run_ai_pick_job(job_id: str, payload: dict):
                 "result": result,
                 "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             })
+        agent_workspace.finish_task(task_id, status="failed", message=message, result=result, error=str(exc))
 
 
 @app.post("/api/v1/quant/signals/ai-pick/start")
@@ -1447,15 +1682,26 @@ async def start_ai_signal_pick(payload: dict | None = Body(default=None)):
     """后台启动AI选股，前端轮询状态，避免浏览器长请求中断。"""
     payload = payload or {}
     job_id = f"AI_PICK_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+    task_id = f"ai-pick-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    payload["task_id"] = task_id
     with _ai_pick_jobs_lock:
         _ai_pick_jobs[job_id] = {
             "job_id": job_id,
+            "task_id": task_id,
             "status": "queued",
             "message": "AI选股已排队",
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "payload": payload,
         }
+    agent_workspace.start_task(
+        "decision",
+        "ai_stock_pick",
+        "AI选股已排队",
+        payload={"job_id": job_id, **payload},
+        task_id=task_id,
+        related_agents=["score", "risk", "execution"],
+    )
     thread = threading.Thread(target=_run_ai_pick_job, args=(job_id, payload), daemon=True)
     thread.start()
     return {"job_id": job_id, "status": "queued", "message": "AI选股已启动"}
@@ -2004,7 +2250,7 @@ def _json_safe(value):
 async def get_stock_minutes(code: str):
     """获取分时图数据"""
     _track_realtime_code(code)
-    minutes = state_store.get_intraday(code)
+    minutes = state_store.get_intraday(code) or data_fetcher.read_intraday_cache(code)
     if not minutes or not data_fetcher.intraday_minutes_valid(minutes):
         minutes = data_fetcher.fetch_intraday_minutes(code, allow_fallback=False)
     source = minutes[0].get("source") if minutes else None
@@ -2608,6 +2854,16 @@ async def get_agent_logs(
 ):
     """获取 Agent 事件日志。"""
     return agent_workspace.get_agent_logs(agent_id=agent_id, limit=limit)
+
+
+@app.get("/api/v1/quant/agents/tasks")
+async def get_agent_tasks(
+    agent_id: str = Query(None),
+    status: str = Query(None),
+    limit: int = Query(50, ge=1, le=300),
+):
+    """获取本地 Agent 编排任务账本。"""
+    return agent_workspace.get_tasks(agent_id=agent_id, status=status, limit=limit)
 
 
 # ==================== 熔断开关 API ====================

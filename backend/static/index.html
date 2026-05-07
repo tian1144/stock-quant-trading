@@ -2061,7 +2061,7 @@
       if (renderAfter && state.active === 'dashboard') renderDashboard();
     }
     async function refreshMarketData({ renderAfter = true } = {}) {
-      const stocks = await api('/api/v1/stocks?limit=300&offset=0', { timeout: 14000 }).catch(() => ({ stocks: state.stocks || [] }));
+      const stocks = await api('/api/v1/stocks?limit=10000&offset=0', { timeout: 28000 }).catch(() => ({ stocks: state.stocks || [] }));
       state.stocks = stocks.stocks || [];
       state.loadedSections.market = true;
       if (renderAfter && state.active === 'market') renderMarket();
@@ -4378,27 +4378,39 @@
     function renderAgents() {
       const agents = (state.agents && state.agents.agents) || [];
       const pipeline = (state.agents && state.agents.pipeline) || ['数据采集', '新闻理解', '评分归因', '结构化决策', '风控否决', '模拟执行'];
+      const orchestrator = (state.agents && state.agents.orchestrator) || {};
+      const tasks = (state.agents && state.agents.tasks) || [];
       document.getElementById('agents').innerHTML = `
-        ${head('智能体工作台', '数据、新闻、评分、决策、风控、执行六个智能体已接入状态与日志，为后续长周期沙盒接管做边界。')}
+        ${head('智能体工作台', '本地 Agent 编排器已接入任务账本、状态快照、事件日志和 artifact，为后续 holaOS 接管做边界。')}
         <div class="toolbar">
           <button class="btn primary" onclick="refreshAgents()">刷新状态</button>
           <button class="btn" onclick="snapshotAgents()">写入状态快照</button>
-          <span class="note">本地状态目录已接入，页面仅展示中文摘要。</span>
+          <span class="note">当前是本地生产编排雏形，真实交易接口默认关闭。</span>
         </div>
+        <div class="grid cols-4">
+          ${metric('运行时', safeText(orchestrator.runtime || 'local_agent_orchestrator'), '本地编排')}
+          ${metric('活跃任务', orchestrator.active_task_count || 0, 'queued/running')}
+          ${metric('任务账本', orchestrator.task_count || 0, '可追溯')}
+          ${metric('holaOS交接', orchestrator.handoff_ready ? '已预留' : '未就绪', orchestrator.production_ready ? '生产态' : '本地态')}
+        </div>
+        <div style="height:14px"></div>
         <div class="pipeline">${pipeline.map((p, i) => `<div class="pipeline-step">${i + 1}. ${escapeHtml(p)}</div>`).join('')}</div>
         <div style="height:14px"></div>
         <div class="placeholder-grid">${agents.length ? agents.map(renderAgentCard).join('') : '<div class="card pad"><div class="loading">智能体状态加载中</div></div>'}</div>
         <div style="height:14px"></div>
+        <div class="card table-wrap"><table><thead><tr><th>任务</th><th>Agent</th><th>状态</th><th>阶段</th><th>进度</th><th>更新时间</th></tr></thead><tbody>${renderAgentTaskRows(tasks)}</tbody></table></div>
+        <div style="height:14px"></div>
         <div class="card"><div class="panel-title">长周期沙盒接入约束</div><div class="panel-body"><div class="kv">
           ${kv('状态文件', '每个智能体独立状态文件，可被长周期任务读取和恢复。')}
           ${kv('事件日志', '每个智能体独立事件日志，保留最近动作、错误和风险阻断。')}
-          ${kv('安全边界', '真实交易接口默认关闭，执行智能体只允许模拟盘流水。')}
-          ${kv('下一步', '把本地状态文件接入长周期任务状态，并保留风控一票否决。')}
+          ${kv('任务账本', '智能选股、AI复核、公告回填会写入统一 task_id、进度和结果摘要。')}
+          ${kv('安全边界', 'RiskAgent 保留否决权，ExecutionAgent 默认只允许模拟盘流水。')}
         </div></div></div>`;
     }
     function renderAgentCard(agent) {
       const metrics = agent.metrics || {};
       const logs = agent.logs || [];
+      const task = agent.active_task || null;
       return `<div class="agent-card">
         <div class="agent-head">
           <div><h3>${agentName(agent)}</h3><div class="agent-role">${escapeHtml(agent.role)}</div></div>
@@ -4409,9 +4421,42 @@
           ${kv('产物', artifactName(agent.artifact))}
           ${kv('交接状态', handoffName(agent.handoff))}
           ${kv('边界', agent.guardrail)}
+          ${task ? kv('当前任务', `${safeText(task.title)} / ${safeText(task.message || task.stage)}`) : ''}
         </div>
         <div class="agent-log">${logs.length ? logs.slice(-4).reverse().map(l => `<div class="agent-log-row"><span>${escapeHtml((l.time || '').slice(11, 19))}</span><strong>${escapeHtml(l.message || l.action || '')}</strong></div>`).join('') : '<div class="note">暂无事件日志</div>'}</div>
       </div>`;
+    }
+    function renderAgentTaskRows(tasks) {
+      if (!tasks.length) return '<tr><td colspan="6" class="empty">暂无编排任务</td></tr>';
+      return tasks.slice(0, 12).map(task => {
+        const progress = task.progress || {};
+        const progressText = progress.total ? `${progress.done || 0}/${progress.total}` : safeText(task.message || progress.message || '-');
+        return `<tr>
+          <td><b>${escapeHtml(task.title || task.task_type || task.task_id)}</b><br><span class="muted">${escapeHtml(task.task_id || '')}</span></td>
+          <td>${escapeHtml(agentLabel(task.agent_id))}</td>
+          <td><span class="badge ${agentStatusClass(task.status)}">${escapeHtml(taskStatusText(task.status))}</span></td>
+          <td>${escapeHtml(task.stage || '-')}</td>
+          <td>${escapeHtml(progressText)}</td>
+          <td>${escapeHtml((task.updated_at || '').replace('T', ' '))}</td>
+        </tr>`;
+      }).join('');
+    }
+    function agentLabel(id) {
+      return ({
+        data: '数据',
+        news: '新闻',
+        technical: '技术',
+        capital: '资金',
+        sentiment: '情绪',
+        score: '评分',
+        decision: '决策',
+        risk: '风控',
+        execution: '执行',
+        review: '复盘'
+      })[id] || safeText(id || '-');
+    }
+    function taskStatusText(status) {
+      return ({ queued: '排队', running: '运行', done: '完成', failed: '失败', blocked: '阻断', cancelled: '取消' })[status] || safeText(status || '-');
     }
     function agentName(agent) {
       return safeText(agent.name).replace('Agent', '智能体');
@@ -4427,17 +4472,25 @@
         'score_card.json': '评分卡',
         'decision.json': '结构化决策',
         'risk_report.json': '风控报告',
-        'paper_trade_log.csv': '模拟交易流水'
+        'paper_trade_log.csv': '模拟交易流水',
+        'technical_view.json': '技术结构',
+        'capital_flow.json': '资金归因',
+        'sentiment_phase.json': '情绪周期',
+        'review_notes.json': '复盘笔记'
       })[value] || '本地数据产物';
     }
     function handoffName(value) {
       const text = safeText(value);
       if (text.includes('/data/')) return '数据智能体状态';
       if (text.includes('/news/')) return '新闻智能体状态';
+      if (text.includes('/technical/')) return '技术智能体状态';
+      if (text.includes('/capital/')) return '资金智能体状态';
+      if (text.includes('/sentiment/')) return '情绪智能体状态';
       if (text.includes('/score/')) return '评分智能体状态';
       if (text.includes('/decision/')) return '决策智能体状态';
       if (text.includes('/risk/')) return '风控智能体状态';
       if (text.includes('/execution/')) return '执行智能体状态';
+      if (text.includes('/review/')) return '复盘智能体状态';
       return '本地状态文件';
     }
     function aiStatusName(value) {
@@ -4470,7 +4523,7 @@
       })[id] || '主流第三方接口通常选择兼容网关。';
     }
     function agentStatusClass(status) {
-      return ({ running: 'green', idle: 'gray', stale: 'orange', blocked: 'red' })[status] || 'gray';
+      return ({ running: 'green', done: 'green', queued: 'orange', idle: 'gray', stale: 'orange', failed: 'red', blocked: 'red', cancelled: 'gray' })[status] || 'gray';
     }
     function renderRoadmap() {
       const ob = state.orderbook;

@@ -620,6 +620,49 @@ def get_sector_rankings() -> list:
     )
 
 
+def _build_fast_sector_rankings(sectors: list, flows: list) -> list:
+    """Build a cache-only sector ranking for page loads.
+
+    The full ranking also recalculates sector news attribution, which can be
+    slow on a small production server when the news cache is large or external
+    feeds are unstable. This helper keeps the overview responsive and lets
+    explicit refreshes do the heavier work.
+    """
+    flow_map = {f.get("code"): f for f in flows or [] if f.get("code")}
+    momentum_map = get_sector_flow_momentum()
+    rows = []
+    for sector in sectors or []:
+        flow = flow_map.get(sector.get("code"), {})
+        momentum = momentum_map.get(sector.get("code"), {})
+        main_net = _to_number(flow.get("main_net_inflow"))
+        rows.append({
+            **sector,
+            "main_net_inflow": main_net,
+            "main_net_pct": _to_number(flow.get("main_net_pct")),
+            "main_net_delta": _to_number(momentum.get("main_net_delta")),
+            "delta_direction": momentum.get("delta_direction", "flat"),
+            "super_large_inflow": _to_number(flow.get("super_large_inflow")),
+            "large_inflow": _to_number(flow.get("large_inflow")),
+            "medium_inflow": _to_number(flow.get("medium_inflow")),
+            "small_inflow": _to_number(flow.get("small_inflow")),
+            "news_count": 0,
+            "positive_news": 0,
+            "negative_news": 0,
+            "neutral_news": 0,
+            "news_impact_score": 0,
+            "flow_direction": "inflow" if main_net > 0 else ("outflow" if main_net < 0 else "flat"),
+        })
+    return sorted(
+        rows,
+        key=lambda x: (
+            _to_number(x.get("main_net_inflow")),
+            _to_number(x.get("main_net_delta")),
+            _to_number(x.get("pct_change")),
+        ),
+        reverse=True,
+    )
+
+
 def get_sector_full_detail(sector_code: str) -> dict:
     """获取板块完整详情：成分股、资金流、新闻、龙头/热门股与行情概况。"""
     sectors = state_store.get_sector_list()
@@ -724,7 +767,13 @@ def get_sector_overview() -> dict:
     ):
         return {**_sector_overview_cache["payload"], "cache_hit": True}
 
-    rankings = get_sector_rankings()
+    cached_sectors, cached_flows = _load_cached_sector_data()
+    if cached_sectors:
+        rankings = _build_fast_sector_rankings(cached_sectors, cached_flows)
+        data_mode = "cache_fast"
+    else:
+        rankings = get_sector_rankings()
+        data_mode = "live_or_cache"
     total_inflow = sum(_to_number(item.get("main_net_inflow")) for item in rankings)
     inflow_count = sum(1 for item in rankings if _to_number(item.get("main_net_inflow")) > 0)
     outflow_count = sum(1 for item in rankings if _to_number(item.get("main_net_inflow")) < 0)
@@ -744,6 +793,7 @@ def get_sector_overview() -> dict:
             "hot_sector": rankings[0] if rankings else {},
             "hot_momentum_sector": hot_momentum[0] if hot_momentum else {},
             "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "data_mode": data_mode,
         },
     }
     if rankings:
