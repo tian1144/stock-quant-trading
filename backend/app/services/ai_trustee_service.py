@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import requests
 import threading
 import time
 import uuid
@@ -404,6 +405,122 @@ def _quote_for(code: str) -> dict:
         except Exception:
             quote = {}
     return quote or {}
+
+
+def _fetch_index_snapshot() -> dict:
+    indices = {
+        "sh000001": {"name": "上证指数", "secid": "1.000001"},
+        "sz399001": {"name": "深证成指", "secid": "0.399001"},
+        "sz399006": {"name": "创业板指", "secid": "0.399006"},
+        "sh000688": {"name": "科创50", "secid": "1.000688"},
+    }
+    secids = ",".join(item["secid"] for item in indices.values())
+    url = "https://push2.eastmoney.com/api/qt/ulist.np/get"
+    params = {
+        "fields": "f2,f3,f4,f12,f14,f17,f18",
+        "secids": secids,
+    }
+    rows = []
+    try:
+        resp = requests.get(url, headers=data_fetcher.HEADERS, params=params, timeout=8)
+        data = resp.json()
+        diff = (data.get("data") or {}).get("diff") or []
+        if isinstance(diff, dict):
+            diff = list(diff.values())
+        by_code = {str(item.get("f12") or ""): item for item in diff}
+        for key, meta in indices.items():
+            code = key[2:]
+            item = by_code.get(code) or {}
+            if not item:
+                continue
+            price = _to_float(item.get("f2"))
+            if price <= 0:
+                continue
+            open_price = _to_float(item.get("f17"))
+            pre_close = _to_float(item.get("f18"))
+            pct_change = _to_float(item.get("f3"))
+            if abs(pct_change) > 100:
+                pct_change = pct_change / 100
+            rows.append({
+                "code": key,
+                "name": meta["name"],
+                "price": round(price, 3) if price else None,
+                "pct_change": round(pct_change, 4),
+                "direction": "up" if pct_change > 0 else "down" if pct_change < 0 else "flat",
+                "open": round(open_price, 3) if open_price else None,
+                "pre_close": round(pre_close, 3) if pre_close else None,
+                "source": "eastmoney_index_realtime",
+            })
+    except Exception as exc:
+        return {
+            "available": False,
+            "source": "eastmoney_index_realtime",
+            "error": str(exc),
+            "note": "指数快照获取失败，AI不得自行编造指数涨跌。",
+        }
+    return {
+        "available": bool(rows),
+        "source": "eastmoney_index_realtime",
+        "fetched_at": _now(),
+        "indices": rows,
+        "note": "000001 在股票接口代表平安银行；上证指数必须使用 sh000001 / secid=1.000001。",
+    }
+
+
+def _market_breadth_snapshot(limit: int = 5511) -> dict:
+    stocks = []
+    try:
+        universe = data_fetcher.read_stock_universe_cache() or []
+        stocks = _as_list(universe)[:limit]
+    except Exception:
+        stocks = []
+    up = down = flat = available = 0
+    amount = 0.0
+    updated_at = ""
+    for stock in stocks:
+        code = str((stock or {}).get("code") or "").strip()
+        if not code:
+            continue
+        quote = data_fetcher.read_realtime_cache(code) or state_store.get_realtime(code) or stock
+        pct = _to_float((quote or {}).get("pct_change"))
+        price = _to_float((quote or {}).get("price") or (quote or {}).get("current_price"))
+        if price <= 0:
+            continue
+        available += 1
+        amount += _to_float((quote or {}).get("amount"))
+        if pct > 0:
+            up += 1
+        elif pct < 0:
+            down += 1
+        else:
+            flat += 1
+        updated_at = max(updated_at, str((quote or {}).get("cached_at") or (quote or {}).get("updated_at") or ""))
+    return {
+        "available": available > 0,
+        "source": "local_verified_realtime_cache",
+        "stock_total": len(stocks),
+        "quote_available": available,
+        "up_count": up,
+        "down_count": down,
+        "flat_count": flat,
+        "total_amount": round(amount, 2),
+        "updated_at": updated_at,
+    }
+
+
+def _build_market_fact_snapshot() -> dict:
+    snapshot = {
+        "generated_at": _now(),
+        "index_snapshot": _fetch_index_snapshot(),
+        "breadth_snapshot": _market_breadth_snapshot(),
+        "data_rules": [
+            "AI只能引用本对象中的指数涨跌和涨跌家数。",
+            "如果 index_snapshot.available=false，必须写指数数据未取得，禁止猜测上证指数涨跌。",
+            "000001 是平安银行股票代码，不是上证指数；上证指数使用 sh000001。",
+        ],
+    }
+    _record_event("data", "AI托管市场事实快照", "已生成指数和涨跌家数硬数据，供AI托管引用。", snapshot)
+    return snapshot
 
 
 def _trade_learning_takeaways(fill: dict) -> list[str]:
@@ -1174,7 +1291,7 @@ def _pick_available_candidates(strategy: str) -> list:
     return _as_list(rows)[:5]
 
 
-def _build_ai_policy(strategy: str, portfolio: dict, positions: list, candidates: list) -> dict:
+def _build_ai_policy(strategy: str, portfolio: dict, positions: list, candidates: list, market_fact_snapshot: Optional[dict] = None) -> dict:
     candidates = _as_list(candidates)
     schema_hint = """{
   "risk_mode": "aggressive|balanced|defensive",
@@ -1204,6 +1321,7 @@ def _build_ai_policy(strategy: str, portfolio: dict, positions: list, candidates
             "portfolio": portfolio,
             "positions": positions,
             "candidates": candidates[:10],
+            "market_fact_snapshot": market_fact_snapshot or {},
             "market_state": {
                 "is_trading_day": is_effective_trading_day(date.today()),
                 "is_trading_hours": is_effective_trading_hours(),
@@ -1234,7 +1352,8 @@ def _build_ai_plan(strategy: str, candidates: list) -> dict:
     candidates = _as_list(candidates)
     portfolio = portfolio_manager.get_portfolio_summary()
     positions = portfolio_manager.get_position_list()
-    ai_policy = _build_ai_policy(strategy, portfolio, positions, candidates)
+    market_fact_snapshot = _build_market_fact_snapshot()
+    ai_policy = _build_ai_policy(strategy, portfolio, positions, candidates, market_fact_snapshot=market_fact_snapshot)
     compact_candidates = []
     for row in candidates[:5]:
         code = row.get("code")
@@ -1265,6 +1384,9 @@ def _build_ai_plan(strategy: str, candidates: list) -> dict:
             "每一笔计划、挂单、撤销、成交、未成交原因都必须写清楚时间、股票、价格、数量、依据、新闻/板块/游资经验证据。"
             "你可以决定20万模拟资金如何买卖，但必须遵守T+1、100股整数倍、涨跌停排队、无创业板/科创板/北交所权限、"
             "佣金万三、卖出印花税万五、过户费十万分之一。必须在托管截止日收盘前清仓。输出JSON。"
+            "你必须严格使用 market_fact_snapshot 中的指数涨跌、涨跌家数和时间戳；"
+            "禁止自行编造上证指数、深成指、创业板指、涨跌家数、涨停跌停或成交额。"
+            "如果 market_fact_snapshot 缺失某项，必须明确写“未取得”，不得猜测。"
         ),
         {
             "now": _now(),
@@ -1278,6 +1400,7 @@ def _build_ai_plan(strategy: str, candidates: list) -> dict:
             "portfolio": portfolio,
             "positions": positions,
             "candidates": compact_candidates,
+            "market_fact_snapshot": market_fact_snapshot,
             "fees": TRUSTEE_FEES,
             "ai_policy": ai_policy,
         },
