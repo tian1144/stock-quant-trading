@@ -2061,7 +2061,7 @@
       if (renderAfter && state.active === 'dashboard') renderDashboard();
     }
     async function refreshMarketData({ renderAfter = true } = {}) {
-      const stocks = await api('/api/v1/stocks?limit=300&offset=0', { timeout: 14000 }).catch(() => ({ stocks: state.stocks || [] }));
+      const stocks = await api('/api/v1/stocks?limit=10000&offset=0', { timeout: 28000 }).catch(() => ({ stocks: state.stocks || [] }));
       state.stocks = stocks.stocks || [];
       state.loadedSections.market = true;
       if (renderAfter && state.active === 'market') renderMarket();

@@ -298,6 +298,28 @@ def _load_stock_universe_fast(force_refresh: bool = False) -> list:
     return stocks
 
 
+def _merge_realtime_cache_for_stocks(stocks: list) -> list:
+    merged = []
+    for stock in stocks or []:
+        item = dict(stock or {})
+        code = str(item.get("code", "")).strip()
+        if code:
+            realtime = data_fetcher.read_realtime_cache(code) or {}
+            if realtime:
+                item.update({
+                    "name": item.get("name") or realtime.get("name", ""),
+                    "price": realtime.get("price") or realtime.get("current_price") or item.get("price", 0),
+                    "pct_change": realtime.get("pct_change", item.get("pct_change", 0)),
+                    "amount": realtime.get("amount", item.get("amount", 0)),
+                    "volume": realtime.get("volume", item.get("volume", 0)),
+                    "source": realtime.get("source", item.get("source", "cache_file")),
+                    "validation_status": realtime.get("validation_status", item.get("validation_status", "cache")),
+                    "updated_at": realtime.get("cached_at") or item.get("updated_at"),
+                })
+        merged.append(item)
+    return merged
+
+
 def _update_screening_job(job_id: str, **updates):
     with _screening_jobs_lock:
         job = _screening_jobs.get(job_id) or {}
@@ -861,7 +883,7 @@ async def get_stocks(
 
         all_stocks = _stock_cache["stocks"]
         total = len(all_stocks)
-        paginated_stocks = all_stocks[offset:offset + limit]
+        paginated_stocks = _merge_realtime_cache_for_stocks(all_stocks[offset:offset + limit])
 
         return {"total": total, "stocks": paginated_stocks}
 
@@ -1117,6 +1139,30 @@ async def run_post_close_validation_now():
 async def get_snapshot(stock_code: str):
     """获取单只股票实时行情（同花顺数据源）"""
     _track_realtime_code(stock_code)
+    cached = data_fetcher.read_realtime_cache(stock_code)
+    if cached:
+        threading.Thread(
+            target=lambda: data_fetcher.fetch_verified_realtime_batch([stock_code]),
+            daemon=True,
+        ).start()
+        return {
+            "code": stock_code,
+            "name": cached.get("name", ""),
+            "current_price": cached.get("price") or cached.get("current_price", 0),
+            "open": cached.get("open", 0),
+            "high": cached.get("high", 0),
+            "low": cached.get("low", 0),
+            "pre_close": cached.get("pre_close", 0),
+            "pct_change": cached.get("pct_change", 0),
+            "volume": cached.get("volume", 0),
+            "amount": cached.get("amount", 0),
+            "source": cached.get("source", "cache_file"),
+            "validation_status": cached.get("validation_status", "cache"),
+            "validated_sources": cached.get("validated_sources", []),
+            "updated_at": cached.get("cached_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "cache_hit": True,
+            "background_refresh": True,
+        }
     verified = data_fetcher.fetch_verified_realtime_batch([stock_code]).get(stock_code)
     if verified:
         return {
@@ -1156,10 +1202,34 @@ async def get_snapshots(
     stock_codes = [code.strip() for code in codes.split(",") if code.strip()][:20]
     for code in stock_codes:
         _track_realtime_code(code)
-    verified_batch = data_fetcher.fetch_verified_realtime_batch(stock_codes)
     snapshots = []
-
+    missing_codes = []
     for code in stock_codes:
+        cached = data_fetcher.read_realtime_cache(code)
+        if cached:
+            snapshots.append({
+                "code": code,
+                "name": cached.get("name", ""),
+                "current_price": cached.get("price") or cached.get("current_price", 0),
+                "open": cached.get("open", 0),
+                "volume": cached.get("volume", 0),
+                "amount": cached.get("amount", 0),
+                "source": cached.get("source", "cache_file"),
+                "validation_status": cached.get("validation_status", "cache"),
+                "validated_sources": cached.get("validated_sources", []),
+                "cache_hit": True,
+            })
+        else:
+            missing_codes.append(code)
+    if snapshots:
+        refresh_codes = list(stock_codes)
+        threading.Thread(
+            target=lambda: data_fetcher.fetch_verified_realtime_batch(refresh_codes),
+            daemon=True,
+        ).start()
+    verified_batch = data_fetcher.fetch_verified_realtime_batch(missing_codes) if missing_codes else {}
+
+    for code in missing_codes:
         verified = verified_batch.get(code)
         if verified:
             snapshots.append({
@@ -2004,7 +2074,7 @@ def _json_safe(value):
 async def get_stock_minutes(code: str):
     """获取分时图数据"""
     _track_realtime_code(code)
-    minutes = state_store.get_intraday(code)
+    minutes = state_store.get_intraday(code) or data_fetcher.read_intraday_cache(code)
     if not minutes or not data_fetcher.intraday_minutes_valid(minutes):
         minutes = data_fetcher.fetch_intraday_minutes(code, allow_fallback=False)
     source = minutes[0].get("source") if minutes else None
