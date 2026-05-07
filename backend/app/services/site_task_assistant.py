@@ -49,6 +49,7 @@ def _safe_job(job: dict) -> dict:
 
 
 def _mask_email(email: str) -> str:
+    email = _extract_email(str(email or "")) or str(email or "")
     email = str(email or "")
     if "@" not in email:
         return email
@@ -71,7 +72,7 @@ def _json_safe(value):
 
 def classify_task(message: str) -> dict:
     text = str(message or "").strip()
-    email_match = re.search(r"[A-Za-z0-9_.+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", text)
+    email = _extract_email(text)
     top_count_match = re.search(r"([一二三四五六七八九十\d]+)\s*(?:支|只|个)?\s*(?:股票|标的|票)", text)
     target_count = _cn_number(top_count_match.group(1)) if top_count_match else 3
     wants_stock_pick = any(key in text for key in ["最值得投资", "值得投资", "支股票", "只股票", "个股票", "股票推荐", "选出", "挑出", "推荐"]) and any(
@@ -80,15 +81,15 @@ def classify_task(message: str) -> dict:
     wants_report = any(key in text for key in ["报告", "总结", "汇总", "复盘", "PDF", "pdf", "邮件", "邮箱", "发送"])
     wants_send = any(key in text for key in ["邮件", "邮箱", "发送", "发给", "email", "mail"])
     wants_pdf = any(key in text for key in ["PDF", "pdf", "报告", "总结", "汇总", "复盘"])
-    if wants_send and email_match and any(key in text for key in ["股票", "投资", "标的", "买入", "关注"]):
+    if wants_send and email and any(key in text for key in ["股票", "投资", "标的", "买入", "关注"]):
         wants_stock_pick = True
     if wants_stock_pick:
         return {
             "task_type": "investment_report",
             "can_execute": True,
             "requires_email": wants_send,
-            "email": email_match.group(0) if email_match else "",
-            "missing": "email" if wants_send and not email_match else "",
+            "email": email,
+            "missing": "email" if wants_send and not email else "",
             "title": "自主投研选股报告",
             "target_count": max(1, min(10, target_count or 3)),
         }
@@ -97,8 +98,8 @@ def classify_task(message: str) -> dict:
             "task_type": "site_report",
             "can_execute": True,
             "requires_email": wants_send,
-            "email": email_match.group(0) if email_match else "",
-            "missing": "email" if wants_send and not email_match else "",
+            "email": email,
+            "missing": "email" if wants_send and not email else "",
             "title": "站内信息汇总报告",
             "target_count": max(1, min(10, target_count or 3)),
         }
@@ -110,6 +111,11 @@ def classify_task(message: str) -> dict:
         "missing": "",
         "title": "",
     }
+
+
+def _extract_email(text: str) -> str:
+    match = re.search(r"[A-Za-z0-9_.+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", str(text or ""))
+    return match.group(0) if match else ""
 
 
 def _cn_number(text: str) -> int:
@@ -517,6 +523,14 @@ def _find_chinese_font() -> str:
 
 
 def send_email_with_attachment(to_email: str, subject: str, body: str, attachment_path: str) -> dict:
+    original_to_email = str(to_email or "")
+    to_email = _extract_email(original_to_email)
+    if not to_email:
+        return {
+            "requested": True,
+            "sent": False,
+            "message": "PDF已生成，但没有识别到有效收件邮箱。请检查邮箱地址。",
+        }
     host = os.getenv("SMTP_HOST", "")
     port = int(os.getenv("SMTP_PORT", "465") or 465)
     user = os.getenv("SMTP_USER", "")
