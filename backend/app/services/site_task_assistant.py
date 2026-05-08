@@ -218,6 +218,9 @@ def _classify_task_with_model(message: str) -> Optional[dict]:
     if email:
         model_email = email
         requires_email = True
+    if _negates_email_delivery(text):
+        model_email = ""
+        requires_email = False
     if task_type == "chat":
         fallback = _classify_task_fallback(message)
         if fallback.get("can_execute") and (fallback.get("email") or fallback.get("requires_email")):
@@ -260,11 +263,15 @@ def _classify_task_fallback(message: str) -> dict:
     compact = re.sub(r"\s+", "", text.lower())
     email = _extract_email(text)
     target_count = _extract_target_count(text)
+    no_email_delivery = _negates_email_delivery(text)
 
     delivery_intent = bool(email) or _contains_any(compact, [
         "发邮箱", "发送邮箱", "发到邮箱", "发邮件", "发送邮件", "邮件给", "邮箱发",
         "发给我", "发送给我", "email", "mail",
     ])
+    if no_email_delivery:
+        delivery_intent = False
+        email = ""
     artifact_intent = _contains_any(compact, [
         "pdf", "报告", "研报", "总结", "汇总", "复盘", "整理", "导出", "生成",
         "日报", "周报", "发送", "发给", "发到",
@@ -331,6 +338,30 @@ def _extract_email(text: str) -> str:
     return match.group(0) if match else ""
 
 
+def _negates_email_delivery(text: str) -> bool:
+    compact = re.sub(r"\s+", "", str(text or "").lower())
+    return any(phrase in compact for phrase in (
+        "不要发邮件",
+        "不用发邮件",
+        "无需发邮件",
+        "不用邮件",
+        "无需邮件",
+        "不发邮件",
+        "别发邮件",
+        "不要发送邮件",
+        "不用发送邮件",
+        "不要发邮箱",
+        "不发邮箱",
+        "别发邮箱",
+        "不要发送邮箱",
+        "不要发到邮箱",
+        "只总结",
+        "总结即可",
+        "noemail",
+        "no-mail",
+    ))
+
+
 def _extract_target_count(text: str) -> int:
     text = str(text or "")
     patterns = [
@@ -371,6 +402,11 @@ def _cn_number(text: str) -> int:
 def start_task(message: str, payload: Optional[dict] = None) -> dict:
     payload = payload or {}
     intent = classify_task(message)
+    if _negates_email_delivery(message):
+        intent["requires_email"] = False
+        intent["email"] = ""
+        if intent.get("missing") == "email":
+            intent["missing"] = ""
     if not intent.get("can_execute"):
         return {"ok": False, "error": "当前消息更像普通问答，不需要启动执行任务。", "intent": intent}
     if intent.get("missing") == "email":
