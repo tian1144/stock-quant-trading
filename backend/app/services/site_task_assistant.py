@@ -957,7 +957,7 @@ def summarize_site_context(context: dict, job_payload: dict, task_type: str) -> 
         f"agent_plan：{json.dumps(plan_brief, ensure_ascii=False)}\n"
         "请直接完成任务并生成可发送报告正文。最后自检：用户问到的每个点是否都回答了；如果没有数据，要写已尝试的资源和替代方案。"
     )
-    answer, meta = _chat_text_with_task_timeout("industry_report", system_prompt, user_message, context)
+    answer, meta = _chat_text_with_task_timeout("site_task_report", system_prompt, user_message, context)
     if not meta.get("ok"):
         raise RuntimeError(meta.get("error") or "AI report generation failed; local fallback is disabled.")
     markdown = answer.strip()
@@ -1056,12 +1056,56 @@ def _compact_context_for_ai_report(context: dict) -> dict:
     })
 
 
+def _ultra_compact_context_for_ai_retry(context: dict) -> dict:
+    context = context or {}
+    ai_recs = context.get("ai_recommendations") or {}
+    return _json_safe({
+        "generated_at": context.get("generated_at"),
+        "task": (context.get("agent_plan") or {}).get("objective"),
+        "required_outputs": (context.get("agent_plan") or {}).get("required_outputs", [])[:6],
+        "portfolio": context.get("portfolio") or {},
+        "positions": (context.get("positions") or [])[:5],
+        "top_sectors": (context.get("sector_rankings") or [])[:5],
+        "limit_moves": {
+            "limit_up": ((context.get("limit_moves") or {}).get("limit_up") or [])[:5],
+            "limit_down": ((context.get("limit_moves") or {}).get("limit_down") or [])[:5],
+            "large_up": ((context.get("limit_moves") or {}).get("large_up") or [])[:5],
+            "large_down": ((context.get("limit_moves") or {}).get("large_down") or [])[:5],
+            "counts": (context.get("limit_moves") or {}).get("counts") or {},
+        },
+        "investment_candidates": (context.get("investment_candidates") or [])[:6],
+        "ai_recommendations": {
+            "recommendations": (ai_recs.get("recommendations") or [])[:5],
+            "reviewed_candidates": (ai_recs.get("reviewed_candidates") or [])[:5],
+        },
+        "risk_status": context.get("risk_status") or {},
+        "market_sentiment": context.get("market_sentiment") or {},
+        "news": (context.get("news") or [])[:4],
+        "strategy_memory": str(context.get("strategy_memory") or "")[:800],
+    })
+
+
+def _is_retryable_model_error(meta: dict) -> bool:
+    error = str((meta or {}).get("error") or "").lower()
+    return any(token in error for token in ("504", "timeout", "timed out", "gateway", "connection aborted", "remote end closed"))
+
+
 def _chat_text_with_task_timeout(task_key: str, system_prompt: str, user_message: str, context: dict) -> tuple[str, dict]:
     box = {"done": False, "answer": "", "meta": {}}
 
     def runner():
         try:
             answer, meta = ai_model_service.chat_text(task_key, system_prompt, user_message, _compact_context_for_ai_report(context), profile="chat_assistant")
+            if not meta.get("ok") and _is_retryable_model_error(meta):
+                retry_prompt = (
+                    system_prompt
+                    + "\n\n上一次模型接口超时或网关 504。现在请只基于精简证据包回答用户问题，"
+                    "控制在 900 字以内，但必须覆盖用户问到的板块、资金流、异动和结论。"
+                    "不要输出模板摘要，不要说无法回答；缺数据时说明已尝试的数据源和下一步。"
+                )
+                answer, retry_meta = ai_model_service.chat_text(task_key, retry_prompt, user_message, _ultra_compact_context_for_ai_retry(context), profile="chat_assistant")
+                retry_meta["retried_after"] = meta.get("error")
+                meta = retry_meta
             box.update({"done": True, "answer": answer, "meta": meta})
         except Exception as exc:
             box.update({"done": True, "answer": "", "meta": {"ok": False, "used_ai": False, "error": str(exc)}})

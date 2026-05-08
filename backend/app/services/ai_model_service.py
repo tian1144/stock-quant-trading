@@ -136,6 +136,13 @@ DEFAULT_TASK_POLICIES = {
         "max_context_events": 120,
         "description": "生成深度行业、政策、产业链和板块机会分析。",
     },
+    "site_task_report": {
+        "name": "小窗任务真实回答",
+        "temperature": 0.18,
+        "timeout_seconds": 55,
+        "max_context_events": 40,
+        "description": "小窗可执行任务的最终真实回答，使用压缩证据包，避免网关长时间超时。",
+    },
 }
 
 
