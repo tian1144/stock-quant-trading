@@ -818,6 +818,23 @@ def chat_text(task_key: str, system_prompt: str, user_message: str, context: Opt
         )
         meta["role"] = role
         if not meta.get("ok"):
+            if profile != "main" and role != "main":
+                main_entry, _ = _get_profile_config(config, "main", fallback_main=True)
+                if _profile_ready(main_entry):
+                    fallback_answer, fallback_meta = _post_chat_completion(
+                        main_entry,
+                        task_key,
+                        system_prompt,
+                        f"Site context:\n{context_text}\n\nUser question:\n{user_message}",
+                        temperature,
+                        timeout,
+                    )
+                    fallback_meta["role"] = "main"
+                    fallback_meta["fallback_from"] = role
+                    fallback_meta["fallback_error"] = meta.get("error")
+                    if fallback_meta.get("ok"):
+                        return (fallback_answer or "").strip() or "No valid model response.", fallback_meta
+                    meta["fallback_error"] = fallback_meta.get("error")
             return f"模型调用失败：{meta.get('error', '未知错误')}", meta
         return (answer or "").strip() or "模型没有返回有效内容。", meta
     except Exception as exc:
