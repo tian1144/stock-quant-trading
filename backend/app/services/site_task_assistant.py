@@ -10,6 +10,7 @@ import os
 import re
 import smtplib
 import threading
+import time
 import uuid
 from datetime import datetime
 from email.message import EmailMessage
@@ -433,6 +434,7 @@ def start_task(message: str, payload: Optional[dict] = None) -> dict:
             "page": payload.get("page"),
             "active_strategy": payload.get("active_strategy"),
             "target_count": intent.get("target_count", 3),
+            "initial_intent": intent,
         },
         "progress": {"current": 0, "total": 5},
         "artifacts": [],
@@ -545,9 +547,7 @@ def _run_site_report_task(job_id: str):
 def plan_site_task(job_payload: dict, task_type: str) -> dict:
     user_message = str((job_payload or {}).get("user_message") or "").strip()
     target_count = int((job_payload or {}).get("target_count") or 3)
-    fallback_tools = ["portfolio", "risk", "news"]
-    if task_type == "investment_report":
-        fallback_tools = ["sectors", "sector_money_flow", "candidate_stocks", "ai_recommendations", "risk", "news"]
+    fallback_tools = _infer_site_task_tools(user_message, task_type, bool((job_payload or {}).get("email")))
     fallback = {
         "objective": user_message or "完成站内AI任务",
         "answer_style": "direct",
@@ -557,6 +557,9 @@ def plan_site_task(job_payload: dict, task_type: str) -> dict:
         "no_answer_policy": "不能只拒绝；没有确定答案时给观察条件、次选方案或下一步执行路径。",
         "planner": "fallback",
     }
+    if isinstance((job_payload or {}).get("initial_intent"), dict):
+        fallback["planner"] = "initial_intent"
+        return fallback
     system_prompt = (
         "你是站内AI执行任务的规划器。你的工作不是回答用户，而是像真实助手一样理解目标，"
         "决定需要调用哪些站内工具、必须回答哪些点、以及回答风格。不要做关键词触发，要做语义规划。"
@@ -603,6 +606,28 @@ def plan_site_task(job_payload: dict, task_type: str) -> dict:
         "self_check": [str(x) for x in (parsed.get("self_check") or [])][:8],
         "planner": "model",
     }
+
+
+def _infer_site_task_tools(message: str, task_type: str, wants_email: bool = False) -> list:
+    text = re.sub(r"\s+", "", str(message or "").lower())
+    tools = ["news", "risk", "strategy_memory", "pdf"]
+    if task_type == "investment_report":
+        tools.extend(["sectors", "sector_money_flow", "candidate_stocks", "ai_recommendations", "realtime_quotes"])
+    if any(key in text for key in ("板块", "资金流", "流入", "流出", "涨跌", "异动", "行情", "热点", "主线")):
+        tools.extend(["sectors", "sector_money_flow", "limit_moves", "realtime_quotes"])
+    if any(key in text for key in ("涨停", "跌停", "封板", "炸板", "大涨", "大跌")):
+        tools.append("limit_moves")
+    if any(key in text for key in ("股票", "个股", "推荐", "选股", "潜力", "买", "投资", "三只", "3只")):
+        tools.extend(["candidate_stocks", "ai_recommendations"])
+    if any(key in text for key in ("持仓", "交易", "操作", "买入", "卖出", "模拟盘", "今天ai", "ai思路")):
+        tools.extend(["portfolio", "orders", "ai_recommendations"])
+    if wants_email:
+        tools.append("email")
+    unique = []
+    for tool in tools:
+        if tool not in unique:
+            unique.append(tool)
+    return unique
 
 
 def collect_site_context(agent_plan: Optional[dict] = None) -> dict:
@@ -1087,7 +1112,7 @@ def _ultra_compact_context_for_ai_retry(context: dict) -> dict:
 
 def _is_retryable_model_error(meta: dict) -> bool:
     error = str((meta or {}).get("error") or "").lower()
-    return any(token in error for token in ("504", "timeout", "timed out", "gateway", "connection aborted", "remote end closed"))
+    return any(token in error for token in ("429", "rate_limit", "504", "timeout", "timed out", "gateway", "connection aborted", "remote end closed"))
 
 
 def _chat_text_with_task_timeout(task_key: str, system_prompt: str, user_message: str, context: dict) -> tuple[str, dict]:
@@ -1097,6 +1122,8 @@ def _chat_text_with_task_timeout(task_key: str, system_prompt: str, user_message
         try:
             answer, meta = ai_model_service.chat_text(task_key, system_prompt, user_message, _compact_context_for_ai_report(context), profile="chat_assistant")
             if not meta.get("ok") and _is_retryable_model_error(meta):
+                if "429" in str(meta.get("error") or "") or "rate_limit" in str(meta.get("error") or "").lower():
+                    time.sleep(25)
                 retry_prompt = (
                     system_prompt
                     + "\n\n上一次模型接口超时或网关 504。现在请只基于精简证据包回答用户问题，"
