@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
@@ -1570,6 +1570,7 @@
     const AI_TASKS = [
       ['news_filter', '新闻粗筛', '快速识别利好、利空、板块归因和噪音。'],
       ['deep_analysis', '深度研判', '综合新闻、公告、行情、板块、资金和技术结构。'],
+      ['task_planning', '小窗任务规划', '理解自然语言意图，输出任务计划并驱动后端执行。'],
       ['risk_review', '风控复核', '真伪校验、黑盒复核、一票否决和仓位上限。'],
       ['ai_quality_scoring', '全候选质量打分', '对第二阶段候选池分批评分，筛出复核池。'],
       ['trade_decision', '最终交易建议', '结构化买卖建议、建议时间、挂单价格、概率和失效条件。'],
@@ -1578,6 +1579,7 @@
     const AI_TASK_DEFAULTS = {
       news_filter: { temperature: 0.2, timeout_seconds: 25, max_context_events: 30 },
       deep_analysis: { temperature: 0.18, timeout_seconds: 75, max_context_events: 80 },
+      task_planning: { temperature: 0.03, timeout_seconds: 18, max_context_events: 20 },
       risk_review: { temperature: 0.05, timeout_seconds: 45, max_context_events: 45 },
       ai_quality_scoring: { temperature: 0.1, timeout_seconds: 120, max_context_events: 500 },
       trade_decision: { temperature: 0.08, timeout_seconds: 90, max_context_events: 80 },
@@ -3188,6 +3190,44 @@
       renderAI();
       toast(res.ok ? '风控复核模型已保存' : (res.error || '保存失败'));
     }
+    async function saveChatAssistantConfig(showToast = true) {
+      if (!canModifySensitive()) return toast('当前账号不能修改小窗AI模型。');
+      const provider = document.getElementById('chatAiProvider')?.value || 'openai_compatible';
+      const base_url = document.getElementById('chatAiBaseUrl')?.value.trim() || '';
+      const api_key = document.getElementById('chatAiApiKey')?.value.trim() || '';
+      const selected_model = document.getElementById('chatAiModel')?.value.trim() || '';
+      const enabled = !!document.getElementById('chatAiEnabled')?.checked;
+      const res = await api('/api/v1/ai/chat-assistant/config', { method: 'POST', body: JSON.stringify({ provider, base_url, api_key, selected_model, enabled }) }).catch(e => ({ ok: false, error: e.message }));
+      if (res.config) state.ai.config = res.config;
+      if (showToast && state.active === 'ai') renderAI();
+      if (showToast) toast(res.ok ? '小窗AI模型配置已保存' : (res.error || '保存失败'));
+      return res;
+    }
+    async function detectChatAssistantModels() {
+      if (!canModifySensitive()) return toast('当前账号不能检测小窗AI模型。');
+      const provider = document.getElementById('chatAiProvider')?.value || 'openai_compatible';
+      const base_url = document.getElementById('chatAiBaseUrl')?.value.trim() || '';
+      const api_key = document.getElementById('chatAiApiKey')?.value.trim() || '';
+      const assistant = (state.ai.config || {}).chat_assistant || {};
+      if (!api_key && !assistant.has_api_key) return toast('请先填写小窗AI模型密钥');
+      toast('正在检测小窗AI模型...');
+      const res = await api('/api/v1/ai/chat-assistant/models/detect', { method: 'POST', timeout: 60000, body: JSON.stringify({ provider, base_url, api_key, save: true }) }).catch(e => ({ ok: false, error: e.message }));
+      state.ai.chatDetectResult = res;
+      if (res.ok) { await refreshAIConfig(false); toast(`小窗AI模型检测成功：找到 ${res.model_count || (res.models || []).length} 个模型`); }
+      else { toast(`${res.error || '模型检测失败'}；如果你知道模型名，可以手动填写后保存。`); }
+      renderAI();
+    }
+    async function selectChatAssistantModel(modelId) {
+      if (!canModifySensitive()) return toast('当前账号不能切换小窗AI模型。');
+      if (!modelId) return toast('请选择小窗AI模型');
+      const provider = document.getElementById('chatAiProvider')?.value || ((state.ai.config || {}).chat_assistant || {}).provider || 'openai_compatible';
+      const input = document.getElementById('chatAiModel');
+      if (input) input.value = modelId;
+      const res = await api('/api/v1/ai/chat-assistant/models/select', { method: 'POST', body: JSON.stringify({ model_id: modelId, provider }) }).catch(e => ({ ok: false, error: e.message }));
+      if (res.config) state.ai.config = res.config;
+      renderAI();
+      toast(res.ok ? '小窗AI模型已保存' : (res.error || '保存失败'));
+    }
     async function selectAIModel(modelId) {
       if (!canModifySensitive()) return toast('当前账号不能切换默认模型。');
       if (!modelId) return toast('请选择模型');
@@ -3314,7 +3354,11 @@
     }
     function isAIFormEditing() {
       const active = document.activeElement;
-      return !!active && ['aiProvider', 'aiBaseUrl', 'aiApiKey'].includes(active.id);
+      return !!active && [
+        'aiProvider', 'aiBaseUrl', 'aiApiKey',
+        'chatAiProvider', 'chatAiBaseUrl', 'chatAiApiKey', 'chatAiModel',
+        'riskAiProvider', 'riskAiBaseUrl', 'riskAiApiKey', 'riskAiModel'
+      ].includes(active.id);
     }
     async function snapshotAgents() {
       toast('正在写入智能体状态快照...');
@@ -4554,6 +4598,7 @@
     function renderAI() {
       const cfg = state.ai.config || {};
       const verifier = cfg.risk_verifier || {};
+      const chatAssistant = cfg.chat_assistant || {};
       const providers = state.ai.providers || [];
       const selectedProviderId = cfg.provider || 'openai_compatible';
       const models = (cfg.available_models && cfg.available_models.length)
@@ -4565,6 +4610,8 @@
       const riskProviderId = verifier.provider || 'openai_compatible';
       const riskProviderOptions = providers.map(p => `<option value="${escapeHtml(p.id)}" ${riskProviderId === p.id ? 'selected' : ''}>${providerDisplayName(p)}</option>`).join('');
       const riskModels = (verifier.available_models && verifier.available_models.length) ? verifier.available_models : ((state.ai.riskDetectResult || {}).models || []);
+      const chatProviderId = chatAssistant.provider || 'openai_compatible';
+      const chatProviderOptions = providers.map(p => `<option value="${escapeHtml(p.id)}" ${chatProviderId === p.id ? 'selected' : ''}>${providerDisplayName(p)}</option>`).join('');
         document.getElementById('ai').innerHTML = `
           ${head('智能模型接口', '输入接口地址和密钥后检测模型列表，选择一个默认模型；后续新闻理解、评分、决策和风控复核统一读取这里的配置。')}
           ${readonlyBanner()}
@@ -4608,6 +4655,30 @@
                     ${canModifySensitive() ? `<button class="btn ${cfg.selected_model === m.id ? 'primary' : ''}" onclick="selectAIModel(${jsArg(m.id)})">${cfg.selected_model === m.id ? '已选择' : '选择'}</button>` : ''}
                 </div>`).join('') : '<div class="loading">尚未检测到模型。填写接口地址和密钥后点击“检测模型”。</div>'}
               </div>
+            </div>
+          </div>
+        </div>
+        <div style="height:14px"></div>
+        <div class="card">
+          <div class="panel-title">小窗AI规划模型</div>
+          <div class="panel-body">
+            <div class="grid cols-4">
+              ${metric('启用状态', chatAssistant.enabled ? '已启用' : '回落主模型', chatAssistant.fallback_to_main ? '未独立接管' : '独立接管小窗', chatAssistant.enabled ? 'up' : 'muted')}
+              ${metric('小窗模型', escapeHtml(chatAssistant.selected_model || '--'), chatAssistant.provider_name || '独立规划/对话')}
+              ${metric('可用模型', safeText((chatAssistant.available_models || []).length, 0), chatAssistant.last_detected_at || '尚未检测')}
+              ${metric('密钥状态', chatAssistant.has_api_key ? '已保存' : '未保存', chatAssistant.api_key_masked || '本地私有配置')}
+            </div>
+            <div style="height:12px"></div>
+            <div class="toolbar">
+              <label class="note"><input id="chatAiEnabled" type="checkbox" ${chatAssistant.enabled ? 'checked' : ''}> 启用小窗专用模型</label>
+              <div class="field"><label>供应商</label><select id="chatAiProvider">${chatProviderOptions || '<option value="openai_compatible">兼容网关</option>'}</select></div>
+              <div class="field wide"><label>接口地址</label><input id="chatAiBaseUrl" placeholder="兼容模式填第三方中转；官方模式填官方 API Base URL" value="${escapeHtml(chatAssistant.base_url || '')}"></div>
+              <div class="field wide"><label>密钥</label><input id="chatAiApiKey" type="password" placeholder="${chatAssistant.has_api_key ? chatAssistant.api_key_masked : '请输入小窗AI密钥'}"></div>
+              <div class="field wide"><label>模型</label><input id="chatAiModel" value="${escapeHtml(chatAssistant.selected_model || '')}" placeholder="可检测后选择，也可手动填写"></div>
+            </div>
+            <div class="toolbar" style="margin-bottom:0">
+                ${canModifySensitive() ? '<button class="btn" onclick="saveChatAssistantConfig()">保存小窗模型</button><button class="btn primary" onclick="detectChatAssistantModels()">检测小窗模型</button>' : ''}
+              <span class="note">小窗聊天链路：用户输入 -> 小窗模型理解并规划 -> 后端按计划执行 -> 小窗模型总结回答；未启用时自动回落默认模型。</span>
             </div>
           </div>
         </div>
@@ -5096,21 +5167,23 @@
     function providerDisplayName(provider = {}) {
       const id = provider.id || '';
       return ({
-        openai: '官方模型接口',
-        openai_compatible: '兼容网关',
-        anthropic: '克劳德接口',
-        google_gemini: '谷歌模型接口',
-        custom: '自定义接口'
+        openai: 'OpenAI官方',
+        openai_compatible: '第三方中转/兼容',
+        anthropic: 'Claude官方',
+        gemini: 'Gemini官方',
+        google_gemini: 'Gemini官方',
+        custom: '自定义兼容'
       })[id] || safeText(provider.name || '自定义接口').replace('OpenAI', '兼容').replace('API', '接口');
     }
     function providerNotes(provider = {}) {
       const id = provider.id || '';
       return ({
-        openai: '适合官方模型服务。',
-        openai_compatible: '适合大多数第三方兼容接口。',
-        anthropic: '适合克劳德系列模型。',
-        google_gemini: '适合谷歌模型服务。',
-        custom: '手动填写接口地址和密钥。'
+        openai: '官方模式：OpenAI 官方接口，Base URL 通常为 https://api.openai.com/v1。',
+        openai_compatible: '兼容模式：适合第三方中转站、OpenRouter、DeepSeek兼容接口和大多数 /v1/chat/completions 网关。',
+        anthropic: '官方模式：Claude 官方 Messages 接口，使用 x-api-key 鉴权。',
+        gemini: '官方模式：Gemini 官方 generateContent 接口，密钥走 key 参数。',
+        google_gemini: '官方模式：Gemini 官方 generateContent 接口，密钥走 key 参数。',
+        custom: '自定义兼容：用于其他支持 OpenAI 兼容格式的接口。'
       })[id] || '主流第三方接口通常选择兼容网关。';
     }
     function agentStatusClass(status) {

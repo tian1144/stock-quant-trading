@@ -2190,7 +2190,7 @@ async def ai_chat(payload: dict = Body(...)):
         "如果用户问交割单学习，要说明 OCR候选、PDF原则、已校验复盘 三类证据边界；未校验OCR不能当成真实交易流水。"
         "站内上下文里可能包含历史文件遗留的乱码字段，遇到乱码请忽略，不要说用户输入是乱码。"
     )
-    answer, meta = ai_model_service.chat_text("deep_analysis", system_prompt, message, context)
+    answer, meta = ai_model_service.chat_text("deep_analysis", system_prompt, message, context, profile="chat_assistant")
     agent_workspace.record_event(
         "decision",
         "site_ai_chat",
@@ -2830,6 +2830,25 @@ async def detect_risk_verifier_models(
     return result
 
 
+@app.post("/api/v1/ai/chat-assistant/models/detect")
+async def detect_chat_assistant_models(
+    provider: str = Body("openai_compatible", embed=True),
+    base_url: str = Body("", embed=True),
+    api_key: str = Body("", embed=True),
+    save: bool = Body(True, embed=True),
+):
+    """检测并保存右下角小窗 AI 的专用规划/对话模型。"""
+    result = ai_model_service.detect_chat_assistant_models(provider, base_url, api_key, save=save)
+    agent_workspace.record_event(
+        "decision",
+        "chat_assistant_model_detect",
+        "小窗AI模型检测完成。" if result.get("ok") else f"小窗AI模型检测失败：{result.get('error')}",
+        level="info" if result.get("ok") else "warn",
+        payload={"ok": result.get("ok"), "provider": result.get("provider"), "model_count": result.get("model_count")},
+    )
+    return result
+
+
 @app.post("/api/v1/ai/config")
 async def update_ai_connection_config(
     provider: str = Body("openai_compatible", embed=True),
@@ -2838,6 +2857,20 @@ async def update_ai_connection_config(
 ):
     """保存 AI 供应商、接口地址和密钥；接口地址允许留空。"""
     return ai_model_service.update_connection_config(provider, base_url, api_key)
+
+
+@app.post("/api/v1/ai/chat-assistant/config")
+async def update_chat_assistant_config(
+    provider: str = Body("openai_compatible", embed=True),
+    base_url: str = Body("", embed=True),
+    api_key: str = Body("", embed=True),
+    selected_model: str = Body("", embed=True),
+    enabled: bool = Body(None, embed=True),
+):
+    """保存小窗 AI 专用模型配置。"""
+    result = ai_model_service.update_chat_assistant_config(provider, base_url, api_key, selected_model, enabled)
+    agent_workspace.record_event("decision", "chat_assistant_config", "小窗AI模型配置已保存。", payload={"ok": result.get("ok")})
+    return result
 
 
 @app.post("/api/v1/ai/risk-verifier/config")
@@ -2868,6 +2901,17 @@ async def select_ai_model(
         level="info" if result.get("ok") else "warn",
         payload={"model_id": selected_model, "provider": provider, "error": result.get("error", "")},
     )
+    return result
+
+
+@app.post("/api/v1/ai/chat-assistant/models/select")
+async def select_chat_assistant_model(
+    selected_model: str = Body(..., alias="model_id", embed=True),
+    provider: str = Body(None, embed=True),
+):
+    """选择右下角小窗 AI 专用模型。"""
+    result = ai_model_service.select_chat_assistant_model(selected_model, provider)
+    agent_workspace.record_event("decision", "chat_assistant_select", "小窗AI模型已选择。", payload={"ok": result.get("ok"), "model": selected_model})
     return result
 
 

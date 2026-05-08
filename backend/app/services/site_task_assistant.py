@@ -204,7 +204,7 @@ def _classify_task_with_model(message: str) -> Optional[dict]:
   "intent_reason": "一句话说明你理解到的真实意图",
   "confidence": 0.0
 }"""
-    parsed, meta = ai_model_service.chat_json("task_planning", system_prompt, payload, schema)
+    parsed, meta = ai_model_service.chat_json("task_planning", system_prompt, payload, schema, profile="chat_assistant")
     if not parsed or not meta.get("ok"):
         return None
     task_type = str(parsed.get("task_type") or "chat").strip()
@@ -548,7 +548,7 @@ def plan_site_task(job_payload: dict, task_type: str) -> dict:
   "no_answer_policy": "没有确定答案时如何给替代方案",
   "self_check": ["回复前检查项"]
 }"""
-    parsed, meta = ai_model_service.chat_json("task_planning", system_prompt, payload, schema)
+    parsed, meta = ai_model_service.chat_json("task_planning", system_prompt, payload, schema, profile="chat_assistant")
     if not parsed or not meta.get("ok"):
         return fallback
     tools = [str(x) for x in (parsed.get("tools") or []) if str(x) in {
@@ -991,7 +991,7 @@ def _chat_text_with_task_timeout(task_key: str, system_prompt: str, user_message
 
     def runner():
         try:
-            answer, meta = ai_model_service.chat_text(task_key, system_prompt, user_message, context)
+            answer, meta = ai_model_service.chat_text(task_key, system_prompt, user_message, context, profile="chat_assistant")
             box.update({"done": True, "answer": answer, "meta": meta})
         except Exception as exc:
             box.update({"done": True, "answer": "", "meta": {"ok": False, "used_ai": False, "error": str(exc)}})
