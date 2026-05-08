@@ -6562,12 +6562,7 @@
       el.style.removeProperty('--card-y');
     }
 
-      async function bootstrap() {
-        const authed = await refreshAuth(true);
-        if (!authed) return;
-        loadWatchlist();
-      loadStrategy();
-      loadAIRecommendationsLocal();
+    function initAIChrome() {
       loadAIChatLayout();
       loadAIChatLaunchLayout();
       loadAIChatMessages();
@@ -6575,6 +6570,15 @@
       applyAIChatLayout();
       initAIChatLaunchDrag();
       applyAIChatLaunchLayout();
+    }
+
+      async function bootstrap() {
+        initAIChrome();
+        const authed = await refreshAuth(true);
+        if (!authed) return;
+        loadWatchlist();
+      loadStrategy();
+      loadAIRecommendationsLocal();
       initNav();
       initPremiumPointerEffects();
       enhanceInteractiveSurface();
@@ -6606,7 +6610,10 @@
         if (state.active === 'sectors') refreshSectors(false);
       }, 8000);
     }
-    document.addEventListener('DOMContentLoaded', bootstrap);
+    document.addEventListener('DOMContentLoaded', () => {
+      initAIChrome();
+      bootstrap();
+    });
   </script>
 </body>
 </html>
