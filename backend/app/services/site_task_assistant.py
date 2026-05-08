@@ -38,6 +38,21 @@ JOBS_LOADED = False
 JOB_THREADS: set[str] = set()
 SITE_TASK_AI_WAIT_SECONDS = int(os.environ.get("SITE_TASK_AI_WAIT_SECONDS", "180") or "180")
 SITE_TASK_COLLECT_STEP_SECONDS = 3
+TASK_TOOL_ALLOWLIST = {
+    "sectors",
+    "sector_money_flow",
+    "limit_moves",
+    "candidate_stocks",
+    "realtime_quotes",
+    "ai_recommendations",
+    "portfolio",
+    "orders",
+    "news",
+    "risk",
+    "strategy_memory",
+    "pdf",
+    "email",
+}
 
 
 def _now() -> str:
@@ -172,27 +187,34 @@ def _classify_task_with_model(message: str) -> Optional[dict]:
         return None
     email = _extract_email(text)
     system_prompt = (
-        "你是量化智能猎人的任务规划器。你的工作不是回答用户，而是理解用户这句话要不要触发站内可执行任务。"
-        "你必须主动理解语义、上下文和隐含动作，不要只做关键词匹配。"
-        "可执行任务只有两类："
-        "1) site_report：总结/复盘/整理站内信息、AI交易情况、持仓、风控、新闻、板块、模拟盘、任务状态，并可生成PDF或邮件发送。"
-        "2) investment_report：围绕股票/标的/投资/买入/关注/某月机会/推荐若干只股票做投研筛选报告，并可生成PDF或邮件发送。"
-        "普通闲聊、概念解释、单纯问功能在哪里、没有要求你执行或整理站内信息的问题，返回 chat。"
-        "如果用户给了邮箱，通常表示希望生成内容并发送；如果用户说发我、发过去、邮件、邮箱，也表示需要邮件，但没有邮箱时 missing=email。"
-        "如果用户没有明确说PDF，但说报告/总结/复盘/整理/发送，也可以执行任务。"
-        "只输出JSON，不要解释。"
+        "You are the planning brain for a Chinese quant website assistant. "
+        "Understand the user's meaning semantically, not by keywords. Decide whether this is ordinary chat "
+        "or an executable site task. If it is executable, produce the exact internal data plan and operation plan. "
+        "Use only the provided tool names. Do not invent tools. Output one valid JSON object only. "
+        "If the user negates email delivery, do not require email even if the word email appears. "
+        "If the user asks for market, sector, money-flow, stock, portfolio, risk, news, AI actions, or report delivery, "
+        "choose the relevant tools and required outputs yourself."
     )
     payload = {
         "message": text,
         "extracted_email": email,
-        "allowed_task_types": ["chat", "site_report", "investment_report"],
         "current_date": datetime.now().strftime("%Y-%m-%d"),
-        "site_capabilities": [
-            "读取站内行情、板块、新闻、AI推荐、模拟盘、持仓、交易记录、风控、策略记忆",
-            "生成Markdown/PDF报告",
-            "使用SMTP发送邮件",
-            "围绕站内候选和策略记忆做投研选股报告",
-        ],
+        "allowed_task_types": ["chat", "site_report", "investment_report"],
+        "available_tools": {
+            "sectors": "site sector rankings and sector move summary",
+            "sector_money_flow": "sector-level main money inflow/outflow",
+            "limit_moves": "limit-up, limit-down, large-up and large-down stock samples",
+            "candidate_stocks": "site screening and investment candidate pool",
+            "realtime_quotes": "cached realtime stock quotes",
+            "ai_recommendations": "AI buy/review candidate pool and rationale",
+            "portfolio": "paper portfolio summary and positions",
+            "orders": "paper order and operation history",
+            "news": "site news and sentiment sample",
+            "risk": "risk status, kill switch, and risk config",
+            "strategy_memory": "site strategy memory and short-term trading principles",
+            "pdf": "generate markdown/PDF artifact",
+            "email": "send email only when explicitly requested and recipient is known",
+        },
     }
     schema = """{
   "task_type": "chat|site_report|investment_report",
@@ -200,10 +222,16 @@ def _classify_task_with_model(message: str) -> Optional[dict]:
   "requires_email": false,
   "email": "",
   "missing": "",
-  "title": "简短中文任务标题",
+  "title": "short Chinese task title",
   "target_count": 3,
-  "intent_reason": "一句话说明你理解到的真实意图",
-  "confidence": 0.0
+  "intent_reason": "Chinese explanation of the real user intent",
+  "confidence": 0.0,
+  "tools": ["sectors", "sector_money_flow"],
+  "data_to_collect": ["what site data should be collected and why"],
+  "operation_steps": ["step-by-step backend actions to perform"],
+  "required_outputs": ["points that final answer must cover"],
+  "answer_style": "direct|brief|report",
+  "no_answer_policy": "what to do when data is missing; must offer next action or alternative"
 }"""
     parsed, meta = ai_model_service.chat_json("task_planning", system_prompt, payload, schema, profile="chat_assistant")
     if not parsed or not meta.get("ok"):
@@ -222,12 +250,10 @@ def _classify_task_with_model(message: str) -> Optional[dict]:
     if _negates_email_delivery(text):
         model_email = ""
         requires_email = False
+    tools = _normalize_plan_tools(parsed.get("tools") or [])
+    if requires_email and model_email and "email" not in tools:
+        tools.append("email")
     if task_type == "chat":
-        fallback = _classify_task_fallback(message)
-        if fallback.get("can_execute") and (fallback.get("email") or fallback.get("requires_email")):
-            fallback["planner"] = "fallback_after_model_chat"
-            fallback["model_intent_reason"] = parsed.get("intent_reason") or ""
-            return fallback
         return {
             "task_type": "chat",
             "can_execute": False,
@@ -236,9 +262,15 @@ def _classify_task_with_model(message: str) -> Optional[dict]:
             "missing": "",
             "title": "",
             "target_count": 3,
-            "intent_reason": parsed.get("intent_reason") or "模型判断为普通对话。",
+            "intent_reason": parsed.get("intent_reason") or "model_classified_as_chat",
             "confidence": confidence,
             "planner": "model",
+            "tools": [],
+            "data_to_collect": [],
+            "operation_steps": [],
+            "required_outputs": [],
+            "answer_style": "direct",
+            "no_answer_policy": "answer_directly",
         }
     target_count = _coerce_count(parsed.get("target_count"), default=3)
     return {
@@ -247,11 +279,17 @@ def _classify_task_with_model(message: str) -> Optional[dict]:
         "requires_email": requires_email,
         "email": model_email,
         "missing": "email" if requires_email and not model_email else str(parsed.get("missing") or ""),
-        "title": str(parsed.get("title") or ("自主投研选股报告" if task_type == "investment_report" else "站内信息汇总报告")),
+        "title": str(parsed.get("title") or ("investment_report" if task_type == "investment_report" else "site_report")),
         "target_count": max(1, min(10, target_count)),
-        "intent_reason": parsed.get("intent_reason") or "模型已理解为可执行站内任务。",
+        "intent_reason": parsed.get("intent_reason") or "model_planned_executable_site_task",
         "confidence": confidence,
         "planner": "model",
+        "tools": tools,
+        "data_to_collect": [str(x) for x in (parsed.get("data_to_collect") or [])][:12],
+        "operation_steps": [str(x) for x in (parsed.get("operation_steps") or [])][:12],
+        "required_outputs": [str(x) for x in (parsed.get("required_outputs") or [])][:12],
+        "answer_style": str(parsed.get("answer_style") or "direct"),
+        "no_answer_policy": str(parsed.get("no_answer_policy") or "If data is missing, explain the gap and provide the next action or alternative."),
     }
 
 
@@ -332,6 +370,15 @@ def _classify_task_fallback(message: str) -> dict:
 
 def _contains_any(text: str, keys: list[str]) -> bool:
     return any(key.lower() in text for key in keys)
+
+
+def _normalize_plan_tools(values) -> list:
+    tools = []
+    for value in values or []:
+        name = str(value or "").strip()
+        if name in TASK_TOOL_ALLOWLIST and name not in tools:
+            tools.append(name)
+    return tools
 
 
 def _extract_email(text: str) -> str:
@@ -557,9 +604,22 @@ def plan_site_task(job_payload: dict, task_type: str) -> dict:
         "no_answer_policy": "不能只拒绝；没有确定答案时给观察条件、次选方案或下一步执行路径。",
         "planner": "fallback",
     }
-    if isinstance((job_payload or {}).get("initial_intent"), dict):
-        fallback["planner"] = "initial_intent"
-        return fallback
+    initial_intent = (job_payload or {}).get("initial_intent")
+    if isinstance(initial_intent, dict) and initial_intent.get("planner") == "model":
+        initial_tools = _normalize_plan_tools(initial_intent.get("tools") or [])
+        if not initial_tools:
+            initial_tools = fallback_tools
+        return {
+            "objective": str(initial_intent.get("intent_reason") or user_message or fallback["objective"]),
+            "answer_style": str(initial_intent.get("answer_style") or "direct"),
+            "tools": initial_tools,
+            "required_outputs": [str(x) for x in (initial_intent.get("required_outputs") or fallback["required_outputs"])][:12],
+            "target_count": max(1, min(10, _coerce_count(initial_intent.get("target_count"), target_count))),
+            "no_answer_policy": str(initial_intent.get("no_answer_policy") or fallback["no_answer_policy"]),
+            "data_to_collect": [str(x) for x in (initial_intent.get("data_to_collect") or [])][:12],
+            "operation_steps": [str(x) for x in (initial_intent.get("operation_steps") or [])][:12],
+            "planner": "model_initial_plan",
+        }
     system_prompt = (
         "你是站内AI执行任务的规划器。你的工作不是回答用户，而是像真实助手一样理解目标，"
         "决定需要调用哪些站内工具、必须回答哪些点、以及回答风格。不要做关键词触发，要做语义规划。"
@@ -948,6 +1008,8 @@ def summarize_site_context(context: dict, job_payload: dict, task_type: str) -> 
         "objective": plan.get("objective"),
         "answer_style": plan.get("answer_style"),
         "tools": plan.get("tools"),
+        "data_to_collect": plan.get("data_to_collect"),
+        "operation_steps": plan.get("operation_steps"),
         "required_outputs": plan.get("required_outputs"),
         "no_answer_policy": plan.get("no_answer_policy"),
         "self_check": plan.get("self_check"),
