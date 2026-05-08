@@ -2122,10 +2122,15 @@
       const head = panel?.querySelector('.ai-chat-head');
       if (!panel || !head || panel.dataset.dragReady) return;
       panel.dataset.dragReady = '1';
+      const eventPoint = event => {
+        const touch = event.touches?.[0] || event.changedTouches?.[0];
+        return touch ? { x: touch.clientX, y: touch.clientY } : { x: event.clientX, y: event.clientY };
+      };
       const movePanel = event => {
         const drag = state.aiChatDragging;
         if (!drag) return;
-        const layout = clampAIChatLayout({ left: event.clientX - drag.dx, top: event.clientY - drag.dy, width: drag.width, height: drag.height });
+        const point = eventPoint(event);
+        const layout = clampAIChatLayout({ left: point.x - drag.dx, top: point.y - drag.dy, width: drag.width, height: drag.height });
         panel.style.left = `${layout.left}px`;
         panel.style.top = `${layout.top}px`;
         panel.style.width = `${layout.width}px`;
@@ -2139,23 +2144,32 @@
         panel.releasePointerCapture?.(event.pointerId);
         saveAIChatLayout();
       };
-      head.addEventListener('pointerdown', event => {
+      const startPanelDrag = event => {
         if (event.target.closest('button, textarea, input, select, a')) return;
+        const point = eventPoint(event);
         const rect = panel.getBoundingClientRect();
-        state.aiChatDragging = { dx: event.clientX - rect.left, dy: event.clientY - rect.top, width: rect.width, height: rect.height };
+        state.aiChatDragging = { dx: point.x - rect.left, dy: point.y - rect.top, width: rect.width, height: rect.height };
         panel.setPointerCapture?.(event.pointerId);
         panel.style.right = 'auto';
         panel.style.bottom = 'auto';
         panel.style.width = `${rect.width}px`;
         panel.style.height = `${rect.height}px`;
         event.preventDefault();
-      });
+      };
+      head.addEventListener('pointerdown', startPanelDrag);
+      head.addEventListener('mousedown', startPanelDrag);
+      head.addEventListener('touchstart', startPanelDrag, { passive: false });
       panel.addEventListener('pointermove', movePanel);
       window.addEventListener('pointermove', movePanel, { passive: false });
+      window.addEventListener('mousemove', movePanel, { passive: false });
+      window.addEventListener('touchmove', movePanel, { passive: false });
       panel.addEventListener('pointerup', stopPanelDrag);
       window.addEventListener('pointerup', stopPanelDrag);
+      window.addEventListener('mouseup', stopPanelDrag);
+      window.addEventListener('touchend', stopPanelDrag);
       panel.addEventListener('pointercancel', stopPanelDrag);
       window.addEventListener('pointercancel', stopPanelDrag);
+      window.addEventListener('touchcancel', stopPanelDrag);
       if ('ResizeObserver' in window) {
         const observer = new ResizeObserver(() => {
           if (!panel.classList.contains('open') || state.aiChatDragging) return;
@@ -2216,10 +2230,13 @@
     function isOverAIHideTarget(event) {
       const target = document.getElementById('aiHideTarget');
       if (!target) return false;
+      const touch = event.touches?.[0] || event.changedTouches?.[0];
+      const clientX = touch ? touch.clientX : event.clientX;
+      const clientY = touch ? touch.clientY : event.clientY;
       const rect = target.getBoundingClientRect();
       const pad = 16;
-      return event.clientX >= rect.left - pad && event.clientX <= rect.right + pad
-        && event.clientY >= rect.top - pad && event.clientY <= rect.bottom + pad;
+      return clientX >= rect.left - pad && clientX <= rect.right + pad
+        && clientY >= rect.top - pad && clientY <= rect.bottom + pad;
     }
     function handleAIChatLaunchClick(event) {
       if (state.aiChatLaunchDragging?.moved) {
@@ -2241,15 +2258,20 @@
       const btn = document.getElementById('aiChatLaunch');
       if (!btn || btn.dataset.dragReady) return;
       btn.dataset.dragReady = '1';
+      const eventPoint = event => {
+        const touch = event.touches?.[0] || event.changedTouches?.[0];
+        return touch ? { x: touch.clientX, y: touch.clientY } : { x: event.clientX, y: event.clientY };
+      };
       const moveLaunch = event => {
         const drag = state.aiChatLaunchDragging;
         if (!drag) return;
+        const point = eventPoint(event);
         const next = clampAIChatLaunchLayout({
-          left: event.clientX - drag.dx,
-          top: event.clientY - drag.dy,
+          left: point.x - drag.dx,
+          top: point.y - drag.dy,
           hidden: false
         });
-        if (Math.abs(event.clientX - drag.startX) > 4 || Math.abs(event.clientY - drag.startY) > 4) {
+        if (Math.abs(point.x - drag.startX) > 4 || Math.abs(point.y - drag.startY) > 4) {
           drag.moved = true;
         }
         drag.overHide = isOverAIHideTarget(event);
@@ -2272,27 +2294,36 @@
         saveAIChatLaunchLayout();
         setTimeout(() => { if (state.aiChatLaunchDragging?.moved) state.aiChatLaunchDragging = null; }, 80);
       };
-      btn.addEventListener('pointerdown', (event) => {
+      const startLaunchDrag = event => {
         if (event.button !== undefined && event.button !== 0) return;
         event.preventDefault();
+        const point = eventPoint(event);
         const rect = btn.getBoundingClientRect();
         state.aiChatLaunchDragging = {
-          dx: event.clientX - rect.left,
-          dy: event.clientY - rect.top,
+          dx: point.x - rect.left,
+          dy: point.y - rect.top,
           moved: false,
           overHide: false,
-          startX: event.clientX,
-          startY: event.clientY
+          startX: point.x,
+          startY: point.y
         };
         btn.setPointerCapture?.(event.pointerId);
         setAIChatLaunchDragUi(true, false);
-      });
+      };
+      btn.addEventListener('pointerdown', startLaunchDrag);
+      btn.addEventListener('mousedown', startLaunchDrag);
+      btn.addEventListener('touchstart', startLaunchDrag, { passive: false });
       btn.addEventListener('pointermove', moveLaunch);
       window.addEventListener('pointermove', moveLaunch, { passive: false });
+      window.addEventListener('mousemove', moveLaunch, { passive: false });
+      window.addEventListener('touchmove', moveLaunch, { passive: false });
       btn.addEventListener('pointerup', stopLaunch);
       window.addEventListener('pointerup', stopLaunch);
+      window.addEventListener('mouseup', stopLaunch);
+      window.addEventListener('touchend', stopLaunch);
       btn.addEventListener('pointercancel', stopLaunch);
       window.addEventListener('pointercancel', stopLaunch);
+      window.addEventListener('touchcancel', stopLaunch);
       window.addEventListener('resize', () => {
         state.aiChatLaunchLayout = clampAIChatLaunchLayout(state.aiChatLaunchLayout || {});
         saveAIChatLaunchLayout();
