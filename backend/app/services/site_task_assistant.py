@@ -467,14 +467,18 @@ def _finish_job(job_id: str, status: str, message: str, result: Optional[dict] =
 
 def _run_site_report_task(job_id: str):
     try:
-        _update_job(job_id, "collecting", "正在收集站内行情、选股、AI推荐、持仓、新闻和风控信息。", 1)
-        context = collect_site_context()
-        _write_artifact(job_id, "context.json", context)
-
-        _update_job(job_id, "summarizing", "正在调用站内AI生成任务报告摘要。", 2)
         with JOBS_LOCK:
             job_payload = (JOBS.get(job_id, {}).get("payload") or {})
             task_type = JOBS.get(job_id, {}).get("task_type", "site_report")
+        _update_job(job_id, "planning", "正在理解任务目标、选择站内工具和输出要求。", 1)
+        agent_plan = plan_site_task(job_payload, task_type)
+
+        _update_job(job_id, "collecting", "正在按计划收集行情、板块、选股、AI推荐、持仓、新闻和风控信息。", 1)
+        context = collect_site_context(agent_plan)
+        context["agent_plan"] = agent_plan
+        _write_artifact(job_id, "context.json", context)
+
+        _update_job(job_id, "summarizing", "正在按任务目标生成直接回答，并检查是否漏答。", 2)
         markdown, ai_meta = summarize_site_context(context, job_payload, task_type)
 
         _update_job(job_id, "writing", "正在写入 Markdown 与 PDF 产物。", 3)
@@ -502,10 +506,75 @@ def _run_site_report_task(job_id: str):
         _finish_job(job_id, "failed", f"站内AI任务失败：{exc}", error=str(exc))
 
 
-def collect_site_context() -> dict:
+def plan_site_task(job_payload: dict, task_type: str) -> dict:
+    user_message = str((job_payload or {}).get("user_message") or "").strip()
+    target_count = int((job_payload or {}).get("target_count") or 3)
+    fallback_tools = ["portfolio", "risk", "news"]
+    if task_type == "investment_report":
+        fallback_tools = ["sectors", "sector_money_flow", "candidate_stocks", "ai_recommendations", "risk", "news"]
+    fallback = {
+        "objective": user_message or "完成站内AI任务",
+        "answer_style": "direct",
+        "tools": fallback_tools,
+        "required_outputs": ["直接回答用户问题", "原因和证据", "风险和替代方案"],
+        "target_count": target_count,
+        "no_answer_policy": "不能只拒绝；没有确定答案时给观察条件、次选方案或下一步执行路径。",
+        "planner": "fallback",
+    }
+    system_prompt = (
+        "你是站内AI执行任务的规划器。你的工作不是回答用户，而是像真实助手一样理解目标，"
+        "决定需要调用哪些站内工具、必须回答哪些点、以及回答风格。不要做关键词触发，要做语义规划。"
+        "可用工具只有：sectors, sector_money_flow, candidate_stocks, realtime_quotes, ai_recommendations, "
+        "portfolio, orders, news, risk, strategy_memory, pdf, email。"
+        "如果用户问板块、资金流、涨得猛、热门方向，必须包含 sectors 和 sector_money_flow。"
+        "如果用户问推荐股票、潜力股、买不买，必须包含 candidate_stocks、risk，并要求给原因、条件和次选。"
+        "如果用户要求发送或给了邮箱，必须包含 pdf 和 email。"
+        "输出必须是JSON。"
+    )
+    payload = {
+        "user_message": user_message,
+        "task_type": task_type,
+        "target_count": target_count,
+        "page": (job_payload or {}).get("page"),
+        "active_strategy": (job_payload or {}).get("active_strategy"),
+    }
+    schema = """{
+  "objective": "一句话说明真实目标",
+  "answer_style": "direct|report|brief",
+  "tools": ["sectors"],
+  "required_outputs": ["必须回答的要点"],
+  "target_count": 3,
+  "no_answer_policy": "没有确定答案时如何给替代方案",
+  "self_check": ["回复前检查项"]
+}"""
+    parsed, meta = ai_model_service.chat_json("task_planning", system_prompt, payload, schema)
+    if not parsed or not meta.get("ok"):
+        return fallback
+    tools = [str(x) for x in (parsed.get("tools") or []) if str(x) in {
+        "sectors", "sector_money_flow", "candidate_stocks", "realtime_quotes", "ai_recommendations",
+        "portfolio", "orders", "news", "risk", "strategy_memory", "pdf", "email",
+    }]
+    if not tools:
+        tools = fallback_tools
+    return {
+        "objective": str(parsed.get("objective") or fallback["objective"]),
+        "answer_style": str(parsed.get("answer_style") or "direct"),
+        "tools": tools,
+        "required_outputs": [str(x) for x in (parsed.get("required_outputs") or fallback["required_outputs"])][:10],
+        "target_count": max(1, min(10, _coerce_count(parsed.get("target_count"), target_count))),
+        "no_answer_policy": str(parsed.get("no_answer_policy") or fallback["no_answer_policy"]),
+        "self_check": [str(x) for x in (parsed.get("self_check") or [])][:8],
+        "planner": "model",
+    }
+
+
+def collect_site_context(agent_plan: Optional[dict] = None) -> dict:
+    agent_plan = agent_plan or {}
+    tools = set(agent_plan.get("tools") or [])
     screening = (_call_with_timeout("screening", state_store.get_screening_results, []) or [])[:30]
     screening_source = "cached_screening_results"
-    sectors = _collect_sector_rankings_for_task(limit=12)
+    sector_limit = 12 if ("sectors" in tools or "sector_money_flow" in tools or not tools) else 6
+    sectors = _collect_sector_rankings_for_task(limit=sector_limit)
     if not screening:
         screening_source = "realtime_cache_fast_sample"
         screening = _call_with_timeout("realtime_sample", lambda: _build_realtime_screening_sample(limit=30), []) or []
@@ -756,11 +825,21 @@ def _candidate_row(item: dict, source: str, boost: float = 0) -> dict:
 
 
 def summarize_site_context(context: dict, job_payload: dict, task_type: str) -> tuple[str, dict]:
-    target_count = int(job_payload.get("target_count", 3) or 3)
+    plan = context.get("agent_plan") or {}
+    target_count = int(plan.get("target_count") or job_payload.get("target_count", 3) or 3)
     user_task = job_payload.get("user_message") or "请汇总站内关键状态。"
+    plan_brief = {
+        "objective": plan.get("objective"),
+        "answer_style": plan.get("answer_style"),
+        "tools": plan.get("tools"),
+        "required_outputs": plan.get("required_outputs"),
+        "no_answer_policy": plan.get("no_answer_policy"),
+        "self_check": plan.get("self_check"),
+    }
     if task_type == "investment_report":
         system_prompt = (
             "你是量化智能猎人的任务型AI投研助手。请根据站内上下文完成用户的投研任务，"
+            "你必须先遵守 agent_plan：按 objective 作答，覆盖 required_outputs，使用 tools 对应数据证据。"
             f"从 investment_candidates 中自主筛出最值得重点关注的 {target_count} 只股票。"
             "必须按用户问题直接作答，不要先套一页摘要模板；用户问板块就先回答板块，问股票就直接给股票。"
             "如果用户问当前哪些板块涨得疯狂或资金进入较大，必须使用 sector_rankings 输出3个强势板块，写清涨幅、主力净流入、龙头股和入手条件。"
@@ -774,20 +853,60 @@ def summarize_site_context(context: dict, job_payload: dict, task_type: str) -> 
     else:
         system_prompt = (
             "你是量化智能猎人的任务型AI助手。请根据站内上下文生成一份可执行投研任务报告，"
+            "你必须先遵守 agent_plan：按 objective 作答，覆盖 required_outputs，使用 tools 对应数据证据。"
             "必须按用户问题直接作答，不要套固定摘要模板；问什么答什么，并带上原因、证据和下一步方案。"
             "必须用中文，结构清晰，包含：一页摘要、市场状态、选股和AI推荐、持仓和模拟盘、"
             "新闻/板块/情绪、主要风险、下一步任务清单。不要泄露任何API密钥或本地敏感配置。"
             "不要只拒绝用户请求；如果当前没有确定答案，必须说明暂不建议直接执行，并给出可执行的替代方案、观察条件或自选方案。"
             "涉及交易必须声明这只是研究和模拟盘参考，不能跳过风控复核。"
         )
-    user_message = f"用户任务：{user_task}\n请直接完成任务并生成可发送报告正文。"
+    user_message = (
+        f"用户任务：{user_task}\n"
+        f"agent_plan：{json.dumps(plan_brief, ensure_ascii=False)}\n"
+        "请直接完成任务并生成可发送报告正文。最后自检：用户问到的每个点是否都回答了；如果没有数据，要写已尝试的资源和替代方案。"
+    )
     answer, meta = _chat_text_with_task_timeout("industry_report", system_prompt, user_message, context)
     if not meta.get("ok"):
         answer = _fallback_markdown_report(context, meta.get("error", "AI未完成"), target_count=target_count, task_type=task_type)
     markdown = answer.strip()
     if not markdown.startswith("#"):
         markdown = "# 量化智能猎人站内AI任务报告\n\n" + markdown
+    markdown = verify_site_task_answer(markdown, context, job_payload, task_type)
     return markdown, meta
+
+
+def verify_site_task_answer(markdown: str, context: dict, job_payload: dict, task_type: str) -> str:
+    plan = context.get("agent_plan") or {}
+    required = " ".join(plan.get("required_outputs") or [])
+    user_task = str((job_payload or {}).get("user_message") or "")
+    text = markdown or ""
+    additions = []
+    need_sector = ("板块" in required or "板块" in user_task or "资金流" in user_task) and "## 当前强势板块" not in text
+    if need_sector:
+        sectors = context.get("sector_rankings") or []
+        additions.append("## 当前强势板块")
+        if sectors:
+            for item in sectors[:3]:
+                additions.append(
+                    f"- {item.get('name', '')}：涨幅 {_to_float(item.get('pct_change')):.2f}%，"
+                    f"主力净流入 {_to_float(item.get('main_net_inflow')):.0f}，"
+                    f"龙头 {item.get('leader_name') or '--'} {_to_float(item.get('leader_pct_change')):.2f}%。"
+                )
+        else:
+            additions.append("- 已尝试读取/刷新板块资源，但当前未拿到有效板块榜单；建议稍后重试或先刷新板块资金流。")
+    need_alt = ("暂时不推荐购买" not in text and "没有可直接买入" in text) or ("次选" in required and "次选" not in text)
+    if task_type == "investment_report" and need_alt:
+        candidates = context.get("investment_candidates") or []
+        additions.append("## 次选方案")
+        additions.append("- 暂时不推荐直接购买；如果必须参与，只能按观察/小仓试单处理。")
+        for item in candidates[: int(plan.get("target_count") or 3)]:
+            additions.append(
+                f"- {item.get('code')} {item.get('name', '')}：综合排序 {item.get('rank_score')}，"
+                f"理由：{item.get('reason', '')}。条件：板块资金继续净流入、个股不破关键支撑、风控未触发。"
+            )
+    if additions:
+        return (text.rstrip() + "\n\n" + "\n".join(additions)).strip()
+    return text
 
 
 def _chat_text_with_task_timeout(task_key: str, system_prompt: str, user_message: str, context: dict) -> tuple[str, dict]:
