@@ -1,6 +1,5 @@
 import json
 import os
-import random
 import secrets
 import string
 import threading
@@ -82,7 +81,7 @@ def send_code(phone: str, purpose: str, ip: str = "") -> dict:
     purpose = str(purpose or "general").strip()[:40]
     ip = str(ip or "unknown")[:80]
     if len(phone) < 6 or len(phone) > 20:
-        return {"ok": False, "error": "请填写有效手机号。"}
+        return {"ok": False, "error": "Please enter a valid phone number."}
     with _lock:
         doc = _cleanup(_read_json(SMS_PATH, {"codes": [], "sends": []}))
         now = time.time()
@@ -90,17 +89,17 @@ def send_code(phone: str, purpose: str, ip: str = "") -> dict:
         last = next((s for s in sorted(sends, key=lambda x: x.get("ts", 0), reverse=True) if s.get("phone") == phone and s.get("purpose") == purpose), None)
         if last and now - float(last.get("ts", 0)) < SEND_INTERVAL_SECONDS:
             wait = int(SEND_INTERVAL_SECONDS - (now - float(last.get("ts", 0))))
-            return {"ok": False, "error": f"验证码发送过于频繁，请 {wait} 秒后再试。", "retry_after_seconds": wait}
+            return {"ok": False, "error": f"SMS code requests are too frequent. Try again in {wait} seconds.", "retry_after_seconds": wait}
         phone_hour = [s for s in sends if s.get("phone") == phone and _same_hour(float(s.get("ts", 0)))]
         phone_day = [s for s in sends if s.get("phone") == phone and _same_day(float(s.get("ts", 0)))]
         ip_hour = [s for s in sends if s.get("ip") == ip and _same_hour(float(s.get("ts", 0)))]
         pair_hour = [s for s in sends if s.get("phone") == phone and s.get("ip") == ip and _same_hour(float(s.get("ts", 0)))]
         if len(phone_hour) >= MAX_PHONE_PER_HOUR:
-            return {"ok": False, "error": "该手机号一小时内验证码次数过多，请稍后再试。"}
+            return {"ok": False, "error": "This phone number has requested too many SMS codes in the last hour. Please try later."}
         if len(phone_day) >= MAX_PHONE_PER_DAY:
-            return {"ok": False, "error": "该手机号今日验证码次数已达上限。"}
+            return {"ok": False, "error": "This phone number has reached today's SMS code limit."}
         if len(ip_hour) >= MAX_IP_PER_HOUR or len(pair_hour) >= MAX_PAIR_PER_HOUR:
-            return {"ok": False, "error": "请求过于频繁，已触发防刷保护，请稍后再试。"}
+            return {"ok": False, "error": "Too many requests. Anti-abuse protection is active; please try again later."}
         code = _generate_code()
         doc.setdefault("codes", []).append({
             "phone": phone,
@@ -120,12 +119,12 @@ def send_code(phone: str, purpose: str, ip: str = "") -> dict:
             f.write(f"{_now()} phone={phone} purpose={purpose} code={code} ip={ip}\n")
     return {
         "ok": True,
-        "message": "验证码已发送。",
+        "message": "SMS code has been sent.",
         "phone_masked": _mask_phone(phone),
         "expires_in_seconds": CODE_TTL_SECONDS,
         "retry_after_seconds": SEND_INTERVAL_SECONDS,
         "dev_mode": True,
-        "dev_hint": "开发模式验证码已写入 backend/data/auth/sms_dev.log；接入短信平台后不再返回或记录明文验证码。",
+        "dev_hint": "Development mode: the SMS code is written to backend/data/auth/sms_dev.log. After connecting a real SMS provider, plaintext codes will no longer be returned or logged.",
     }
 
 
@@ -134,7 +133,7 @@ def verify_code(phone: str, purpose: str, code: str) -> dict:
     purpose = str(purpose or "general").strip()[:40]
     code = str(code or "").strip().upper()
     if not phone or not code:
-        return {"ok": False, "error": "请填写手机号和验证码。"}
+        return {"ok": False, "error": "Please enter both phone number and SMS code."}
     with _lock:
         doc = _cleanup(_read_json(SMS_PATH, {"codes": [], "sends": []}))
         now = time.time()
@@ -142,15 +141,15 @@ def verify_code(phone: str, purpose: str, code: str) -> dict:
         row = sorted(rows, key=lambda x: x.get("created_ts", 0), reverse=True)[0] if rows else None
         if not row or row.get("expires_at", 0) <= now:
             _write_json(SMS_PATH, doc)
-            return {"ok": False, "error": "验证码不存在或已过期。"}
+            return {"ok": False, "error": "SMS code does not exist or has expired."}
         row["attempts"] = int(row.get("attempts") or 0) + 1
         if row["attempts"] > 5:
             row["used_at"] = _now()
             _write_json(SMS_PATH, doc)
-            return {"ok": False, "error": "验证码错误次数过多，请重新发送。"}
+            return {"ok": False, "error": "Too many incorrect SMS code attempts. Please request a new code."}
         if row.get("code") != code:
             _write_json(SMS_PATH, doc)
-            return {"ok": False, "error": "验证码错误。"}
+            return {"ok": False, "error": "Incorrect SMS code."}
         row["used_at"] = _now()
         _write_json(SMS_PATH, doc)
-    return {"ok": True, "message": "验证码验证通过。"}
+    return {"ok": True, "message": "SMS code verified."}

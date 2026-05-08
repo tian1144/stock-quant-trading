@@ -141,6 +141,7 @@ DEFAULT_TASK_POLICIES = {
         "temperature": 0.18,
         "timeout_seconds": 55,
         "max_context_events": 40,
+        "max_tokens": 900,
         "description": "小窗可执行任务的最终真实回答，使用压缩证据包，避免网关长时间超时。",
     },
 }
@@ -579,6 +580,7 @@ def _chat_request_json(
     user_content: str,
     temperature: float,
     json_mode: bool = False,
+    max_tokens: Optional[int] = None,
 ) -> dict:
     protocol = PROVIDERS.get(provider, PROVIDERS["openai_compatible"]).get("protocol", "openai_compatible")
     if protocol == "anthropic":
@@ -587,7 +589,7 @@ def _chat_request_json(
             prompt += "\n\nReturn only a valid JSON object. Do not include markdown fences."
         return {
             "model": model,
-            "max_tokens": 4096,
+            "max_tokens": max_tokens or 4096,
             "temperature": temperature,
             "system": system_prompt,
             "messages": [{"role": "user", "content": prompt}],
@@ -597,7 +599,7 @@ def _chat_request_json(
         if json_mode:
             prompt += "\n\nReturn only a valid JSON object. Do not include markdown fences."
         return {
-            "generationConfig": {"temperature": temperature},
+            "generationConfig": {"temperature": temperature, **({"maxOutputTokens": max_tokens} if max_tokens else {})},
             "systemInstruction": {"parts": [{"text": system_prompt}]},
             "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         }
@@ -611,6 +613,8 @@ def _chat_request_json(
     }
     if json_mode:
         payload["response_format"] = {"type": "json_object"}
+    if max_tokens:
+        payload["max_tokens"] = int(max_tokens)
     return payload
 
 
@@ -644,10 +648,12 @@ def _post_chat_completion(
     provider = entry.get("provider") or "openai_compatible"
     model = entry.get("selected_model") or ""
     try:
+        policy = get_task_policy(task_key)
+        max_tokens = int(policy.get("max_tokens") or 0) or None
         response = requests.post(
             _completion_url(entry.get("base_url", ""), provider, model, entry.get("api_key", "")),
             headers={**_headers(provider, entry.get("api_key", "")), "Content-Type": "application/json"},
-            json=_chat_request_json(provider, model, system_prompt, user_content, temperature, json_mode=json_mode),
+            json=_chat_request_json(provider, model, system_prompt, user_content, temperature, json_mode=json_mode, max_tokens=max_tokens),
             timeout=timeout,
         )
         if response.status_code >= 400:

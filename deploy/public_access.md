@@ -3,7 +3,7 @@
 目标公网地址：
 
 ```text
-https://www.lianghuagongju222333.com
+https://www.ljreach.com
 ```
 
 本项目当前 H5 与 API 都由本机 `http://127.0.0.1:8000` 提供。前端使用相对 API 路径，因此通过公网域名访问后，会自动请求同一域名下的后端接口。
@@ -13,17 +13,17 @@ https://www.lianghuagongju222333.com
 这个方案不要求本机有公网 IP，也不要求路由器做端口映射。外部访问链路是：
 
 ```text
-用户浏览器 -> www.lianghuagongju222333.com -> Cloudflare Tunnel -> 本机 127.0.0.1:8000
+用户浏览器 -> www.ljreach.com -> Cloudflare Tunnel -> 本机 127.0.0.1:8000
 ```
 
 ## 前置条件
 
-1. 已注册并拥有 `lianghuagongju222333.com`。
+1. 已注册并拥有 `ljreach.com`。
 2. 域名 DNS 已接入 Cloudflare。
 3. 本机已安装 `cloudflared`。
 4. 后端服务能在本机访问：`http://127.0.0.1:8000/api/v1/health`。
 
-如果还没有域名所有权，无法直接启用 `www.lianghuagongju222333.com`。可以先用临时穿透地址测试，等域名和 DNS 准备好后再绑定正式域名。
+如果还没有域名所有权，无法直接启用 `www.ljreach.com`。可以先用临时穿透地址测试，等域名和 DNS 准备好后再绑定正式域名。
 
 ## 首次配置步骤
 
@@ -56,7 +56,7 @@ C:\Users\Administrator\.cloudflared\config.yml
 给域名创建 DNS 路由：
 
 ```powershell
-cloudflared tunnel route dns lianghua-h5 www.lianghuagongju222333.com
+cloudflared tunnel route dns lianghua-h5 www.ljreach.com
 ```
 
 启动固定隧道：
@@ -68,7 +68,7 @@ cloudflared tunnel run lianghua-h5
 成功后，外部用户访问：
 
 ```text
-https://www.lianghuagongju222333.com
+https://www.ljreach.com
 ```
 
 ## 日常启动

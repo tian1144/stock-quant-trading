@@ -36,7 +36,7 @@ from app.services import (
     technical_analysis, ai_model_service, ai_stock_picker, market_data_hub,
     disclosure_service, strategy_memory_service, trade_review_service,
     ai_trustee_service, trading_calendar_service, auth_service, broker_service,
-    sms_code_service,
+    sms_code_service, email_code_service, tencent_captcha_service,
     site_task_assistant
 )
 from app.backtest.engine import BacktestEngine, create_context_ma_crossover_strategy
@@ -112,7 +112,7 @@ async def no_cache_middleware(request: Request, call_next):
         response.headers["Expires"] = "0"
     return response
 
-PUBLIC_PATHS = {"/", "/api/v1/health", "/api/v1/auth/login", "/api/v1/auth/sms-login", "/api/v1/auth/sms/send"}
+PUBLIC_PATHS = {"/", "/api/v1/health", "/api/v1/auth/login", "/api/v1/auth/sms-login", "/api/v1/auth/email-login", "/api/v1/auth/sms/send", "/api/v1/auth/email/send", "/api/v1/auth/captcha/config", "/api/v1/auth/email/config"}
 PUBLIC_PREFIXES = ("/static/",)
 VISITOR_BLOCKED_PATHS = {
     "/api/v1/quant/settings",
@@ -164,10 +164,11 @@ def _current_user(request: Request) -> dict | None:
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
-    path = request.url.path
+    path = request.url.path or "/"
+    normalized_path = path.rstrip("/") or "/"
     if request.method == "OPTIONS":
         return await call_next(request)
-    if path in PUBLIC_PATHS or any(path.startswith(prefix) for prefix in PUBLIC_PREFIXES):
+    if normalized_path in PUBLIC_PATHS or any(normalized_path.startswith(prefix) for prefix in PUBLIC_PREFIXES):
         return await call_next(request)
     user = auth_service.get_user_by_token(_auth_token_from_request(request))
     if not user:
@@ -190,6 +191,12 @@ async def auth_middleware(request: Request, call_next):
 _stock_cache = {"stocks": [], "updated_at": 0}
 _stock_detail_cache = {}
 CACHE_TTL = 300
+BSE50_FALLBACK = [
+    ("920118", "太湖远大"), ("920002", "万达轴承"), ("920099", "瑞华技术"), ("920008", "成电光信"),
+    ("920016", "中草香料"), ("920060", "万源通"), ("920098", "科隆新材"), ("920116", "星图测控"),
+    ("920128", "胜业电气"), ("920088", "科力股份"), ("835185", "贝特瑞"), ("835368", "连城数控"),
+    ("872808", "曙光数创"), ("833575", "康乐卫士"), ("834599", "同力股份"), ("831526", "凯华材料"),
+]
 
 
 def _normalize_quote_price(value, reference_price: float = 0.0) -> float:
@@ -264,7 +271,7 @@ _realtime_refresh_job = {
 _post_close_job = {
     "enabled": True,
     "last_run_date": None,
-    "run_at": "15:05",
+    "run_at": "15:30",
     "message": "等待闭市校验",
 }
 _stock_universe_job = {
@@ -365,16 +372,45 @@ def _active_stock_universe(stocks: list) -> list:
     return data_fetcher.apply_active_stock_scope(stocks or [])
 
 
+def _ensure_bse_market_rows(stocks: list) -> list:
+    """Keep Beijing Exchange rows visible even when active stock scope trims the tail of the universe."""
+    rows = list(stocks or [])
+    existing = {str(item.get("code", "")).strip() for item in rows if item.get("code")}
+    has_bse = any(code.startswith(("4", "8", "920")) for code in existing)
+    if has_bse:
+        return rows
+    for code, name in BSE50_FALLBACK:
+        if code not in existing:
+            rows.append({
+                "code": code,
+                "name": name,
+                "exchange": "bj",
+                "market": "北交所",
+                "is_st": False,
+                "price": 0,
+                "pct_change": 0,
+                "volume": 0,
+                "amount": 0,
+                "is_suspended": False,
+                "trade_status": "待刷新",
+                "source": "bse_visible_fallback",
+            })
+            existing.add(code)
+    return rows
+
+
 def _stock_universe_incomplete(stocks: list) -> bool:
     codes = [str(s.get("code", "")) for s in stocks or []]
     if len(codes) < 3000:
         return True
-    active_limit = data_fetcher.active_stock_universe_limit()
-    if active_limit and len(codes) >= active_limit:
-        return False
     has_sh = any(c.startswith("6") for c in codes)
     has_sz = any(c.startswith(("0", "2", "3")) for c in codes)
     has_bj = any(c.startswith(("4", "8", "920")) for c in codes)
+    if not (has_sh and has_sz and has_bj):
+        return True
+    active_limit = data_fetcher.active_stock_universe_limit()
+    if active_limit and len(codes) >= active_limit:
+        return False
     return not (has_sh and has_sz and has_bj)
 
 
@@ -388,7 +424,7 @@ def _load_stock_universe_fast(force_refresh: bool = False) -> list:
             fresh = _normalize_stock_universe(data_fetcher.fetch_all_stocks_sina())
         if fresh and len(fresh) >= len(stocks):
             stocks = fresh
-    stocks = _active_stock_universe(stocks)
+    stocks = _ensure_bse_market_rows(_active_stock_universe(stocks))
     _stock_cache["stocks"] = stocks
     _stock_cache["updated_at"] = time.time()
     _ensure_stock_universe(stocks)
@@ -396,6 +432,16 @@ def _load_stock_universe_fast(force_refresh: bool = False) -> list:
 
 
 def _merge_realtime_cache_for_stocks(stocks: list) -> list:
+    bse_missing = []
+    for stock in stocks or []:
+        code = str((stock or {}).get("code", "")).strip()
+        if code.startswith(("4", "8", "920")) and not data_fetcher.read_realtime_cache(code):
+            bse_missing.append(code)
+    if bse_missing:
+        try:
+            data_fetcher.fetch_verified_realtime_batch(bse_missing[:80], require_verified_for_cache=False)
+        except Exception as exc:
+            logger.warning(f"北证实时行情补齐失败: {exc}")
     merged = []
     for stock in stocks or []:
         item = dict(stock or {})
@@ -895,7 +941,7 @@ def _post_close_validation_loop():
                         "limit": 0,
                         "offset": 0,
                         "days": 1000,
-                        "periods": [101, 102],
+                        "periods": [101, 102, 103],
                         "include_realtime": True,
                         "include_intraday": True,
                         "include_money_flow": True,
@@ -946,21 +992,21 @@ def _is_realtime_window(now: datetime) -> bool:
     if not _is_trading_day_now(now):
         return False
     current = now.hour * 60 + now.minute
-    return 9 * 60 + 25 <= current <= 15 * 60
+    return 9 * 60 <= current <= 15 * 60
 
 
 def _is_preopen_window(now: datetime) -> bool:
     if not _is_trading_day_now(now):
         return False
     current = now.hour * 60 + now.minute
-    return 8 * 60 + 45 <= current <= 9 * 60 + 20
+    return 8 * 60 + 30 <= current <= 8 * 60 + 59
 
 
 def _is_postclose_window(now: datetime) -> bool:
     if not _is_trading_day_now(now):
         return False
     current = now.hour * 60 + now.minute
-    return 15 * 60 + 3 <= current <= 16 * 60
+    return 15 * 60 + 30 <= current <= 16 * 60
 
 
 def _build_realtime_refresh_codes(queues: dict, second_limit: int = REALTIME_SECOND_LIMIT, third_limit: int = REALTIME_THIRD_LIMIT) -> list:
@@ -1081,17 +1127,61 @@ async def login(payload: dict = Body(default=None)):
     return auth_service.authenticate(payload.get("login") or payload.get("phone") or "", payload.get("password") or "")
 
 
+@app.get("/api/v1/auth/captcha/config")
+async def captcha_config():
+    return tencent_captcha_service.get_public_config()
+
+
+@app.get("/api/v1/auth/email/config")
+async def email_config():
+    return email_code_service.get_public_config()
+
+
 @app.post("/api/v1/auth/sms/send")
 async def send_sms_code(request: Request, payload: dict = Body(default=None)):
     payload = payload or {}
     ip = request.client.host if request.client else ""
+    captcha_cfg = tencent_captcha_service.get_public_config()
+    if captcha_cfg.get("enabled"):
+        verify = tencent_captcha_service.verify_ticket(
+            payload.get("captcha_ticket") or payload.get("ticket") or "",
+            payload.get("captcha_randstr") or payload.get("randstr") or "",
+            ip,
+        )
+        if not verify.get("ok"):
+            return JSONResponse(status_code=400, content=verify)
     return sms_code_service.send_code(payload.get("phone") or "", payload.get("purpose") or "login", ip=ip)
+
+
+@app.post("/api/v1/auth/email/send")
+async def send_email_code(request: Request, payload: dict = Body(default=None)):
+    payload = payload or {}
+    ip = request.client.host if request.client else ""
+    purpose = payload.get("purpose") or "login"
+    email = str(payload.get("email") or "").strip().lower()
+    login = payload.get("login") or payload.get("phone") or ""
+    if purpose == "login":
+        if not email or "@" not in email:
+            return JSONResponse(status_code=400, content={"ok": False, "error": "邮箱验证码登录必须输入邮箱号。"})
+        resolved = auth_service.email_for_login(email)
+        if not resolved.get("ok"):
+            return JSONResponse(status_code=400, content=resolved)
+        bound_email = str(resolved.get("email") or "").strip().lower()
+        if bound_email != email:
+            return JSONResponse(status_code=400, content={"ok": False, "error": "输入邮箱与账号绑定邮箱不一致，验证码不会改发到其他邮箱。"})
+    return email_code_service.send_code(email, purpose, ip=ip, phone=payload.get("phone") or login)
 
 
 @app.post("/api/v1/auth/sms-login")
 async def sms_login(payload: dict = Body(default=None)):
     payload = payload or {}
     return auth_service.authenticate_by_sms(payload.get("phone") or "", payload.get("code") or "")
+
+
+@app.post("/api/v1/auth/email-login")
+async def email_login(payload: dict = Body(default=None)):
+    payload = payload or {}
+    return auth_service.authenticate_by_email(payload.get("email") or payload.get("login") or payload.get("phone") or "", payload.get("code") or "")
 
 
 @app.post("/api/v1/auth/logout")
@@ -1109,6 +1199,18 @@ async def auth_me(request: Request):
 async def auth_bind_phone(request: Request, payload: dict = Body(default=None)):
     payload = payload or {}
     result = auth_service.bind_phone(_current_user(request) or {}, payload.get("phone") or "", payload.get("code") or "")
+    return JSONResponse(status_code=200 if result.get("ok") else 400, content=result)
+
+
+@app.post("/api/v1/auth/bind-account")
+async def auth_bind_account(request: Request, payload: dict = Body(default=None)):
+    payload = payload or {}
+    result = auth_service.bind_account_with_email(
+        _current_user(request) or {},
+        payload.get("phone") or "",
+        payload.get("email") or "",
+        payload.get("code") or "",
+    )
     return JSONResponse(status_code=200 if result.get("ok") else 400, content=result)
 
 
@@ -1427,7 +1529,7 @@ async def run_post_close_validation_now():
         "limit": 0,
         "offset": 0,
         "days": 1000,
-        "periods": [101, 102],
+        "periods": [101, 102, 103],
         "include_realtime": True,
         "include_intraday": True,
         "include_money_flow": True,
@@ -2508,6 +2610,13 @@ async def get_stock_kline(code: str, period: int = Query(101), days: int = Query
     """
     _track_realtime_code(code)
     df = data_fetcher._read_kline_cache(code, period, days)
+    if int(period) == 101:
+        realtime = data_fetcher.read_realtime_cache(code) or state_store.get_realtime(code) or {}
+        if realtime:
+            data_fetcher.supplement_daily_kline_from_realtime(code, realtime)
+            supplemented_df = data_fetcher._read_kline_cache(code, period, days)
+            if supplemented_df is not None:
+                df = supplemented_df
     min_required = min(int(days or 0), 30) if int(period) == 101 else min(int(days or 0), 8)
     if df is None:
         df = data_fetcher.fetch_kline(code, period, days, allow_fallback=False, prefer_cache=False, force_refresh=True)
@@ -3171,4 +3280,3 @@ async def deactivate_kill():
 async def get_kill_switch():
     """获取熔断开关状态"""
     return get_kill_switch_status()
-

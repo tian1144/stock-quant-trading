@@ -1120,14 +1120,21 @@ def _chat_text_with_task_timeout(task_key: str, system_prompt: str, user_message
 
     def runner():
         try:
-            answer, meta = ai_model_service.chat_text(task_key, system_prompt, user_message, _compact_context_for_ai_report(context), profile="chat_assistant")
+            concise_prompt = (
+                "你是量化智能猎人的站内任务助手。只基于给你的站内证据回答用户问题，直接给结论和原因。"
+                "不要写模板化摘要，不要自称无法访问；证据缺失时说明缺什么、已尝试什么、下一步怎么做。"
+                "如果用户问板块和资金流，必须列出板块、涨跌/资金方向、代表股或样本。"
+                "如果涉及股票建议，必须给条件、风险和模拟盘参考声明。"
+                "回答控制在 900 字以内，中文。"
+            )
+            answer, meta = ai_model_service.chat_text(task_key, concise_prompt, user_message, _compact_context_for_ai_report(context), profile="chat_assistant")
             if not meta.get("ok") and _is_retryable_model_error(meta):
                 if "429" in str(meta.get("error") or "") or "rate_limit" in str(meta.get("error") or "").lower():
                     time.sleep(25)
                 retry_prompt = (
-                    system_prompt
-                    + "\n\n上一次模型接口超时或网关 504。现在请只基于精简证据包回答用户问题，"
-                    "控制在 900 字以内，但必须覆盖用户问到的板块、资金流、异动和结论。"
+                    concise_prompt
+                    + "\n\n上一次模型接口超时或网关限流。现在请只基于更精简证据包回答，"
+                    "控制在 600 字以内，但必须覆盖用户问到的板块、资金流、异动和结论。"
                     "不要输出模板摘要，不要说无法回答；缺数据时说明已尝试的数据源和下一步。"
                 )
                 answer, retry_meta = ai_model_service.chat_text(task_key, retry_prompt, user_message, _ultra_compact_context_for_ai_retry(context), profile="chat_assistant")

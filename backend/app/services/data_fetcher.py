@@ -274,6 +274,18 @@ def _write_kline_cache(code: str, period: int, df: Optional[pd.DataFrame]):
         logger.warning(f"写入K线缓存失败 {code} period={period}: {e}")
 
 
+def _write_kline_cache_accepting_single_source(code: str, period: int, df: Optional[pd.DataFrame], source_note: str = ""):
+    """Write usable public-source K-line rows when strict cross-source validation is unavailable."""
+    if df is None or df.empty:
+        return
+    cache_df = df.copy()
+    if "validation_status" not in cache_df.columns:
+        cache_df["validation_status"] = "single_source"
+    cache_df["validation_note"] = source_note or "public_source_single_or_supplemented"
+    cache_df["validation_checked_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    _write_kline_cache(code, period, cache_df)
+
+
 def _write_kline_candidate_cache(code: str, period: int, df: Optional[pd.DataFrame], report: Optional[dict] = None):
     if df is None or df.empty:
         return
@@ -462,6 +474,74 @@ def read_realtime_cache(code: str) -> Optional[dict]:
         state_store.set_realtime(code, payload)
         return payload
     return None
+
+
+def supplement_daily_kline_from_realtime(code: str, realtime: dict) -> bool:
+    """Merge a real Tencent/public realtime snapshot into today's daily K-line cache."""
+    if not realtime:
+        return False
+    try:
+        price = _to_float(realtime.get("price") or realtime.get("current_price"))
+        open_price = _to_float(realtime.get("open"))
+        high = _to_float(realtime.get("high"))
+        low = _to_float(realtime.get("low"))
+        pre_close = _to_float(realtime.get("pre_close"))
+        if price <= 0 or open_price <= 0 or high <= 0 or low <= 0:
+            return False
+        trade_date = str(realtime.get("trade_date") or realtime.get("date") or datetime.now().strftime("%Y-%m-%d"))[:10]
+        amplitude = _to_float(realtime.get("amplitude"))
+        pct_change = _to_float(realtime.get("pct_change"))
+        change = _to_float(realtime.get("change"))
+        if not amplitude and pre_close:
+            amplitude = round((high - low) / pre_close * 100, 2)
+        if not pct_change and pre_close:
+            pct_change = round((price - pre_close) / pre_close * 100, 2)
+        if not change and pre_close:
+            change = round(price - pre_close, 3)
+        row = {
+            "date": trade_date,
+            "open": open_price,
+            "close": price,
+            "high": high,
+            "low": low,
+            "volume": _to_int(realtime.get("volume")),
+            "amount": _to_float(realtime.get("amount")),
+            "amplitude": amplitude,
+            "pct_change": pct_change,
+            "change": change,
+            "turnover_rate": _to_float(realtime.get("turnover_rate")),
+            "source": "realtime_daily_supplement",
+            "validation_status": realtime.get("validation_status") or "single_source_snapshot",
+            "validated_sources": ",".join([str(x) for x in realtime.get("validated_sources", [])]) if isinstance(realtime.get("validated_sources"), list) else realtime.get("validated_sources", ""),
+            "accepted_sources": ",".join([str(x) for x in realtime.get("accepted_sources", [])]) if isinstance(realtime.get("accepted_sources"), list) else realtime.get("accepted_sources", ""),
+            "validation_note": "daily row supplemented from realtime snapshot",
+            "validation_checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        df = _read_kline_cache(code, 101, None)
+        if df is None or df.empty:
+            df = pd.DataFrame([row])
+        else:
+            df = df.copy()
+            df["date"] = df["date"].astype(str).str[:10]
+            df = df[df["date"] != trade_date]
+            df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+            df = df.sort_values("date").reset_index(drop=True)
+        _write_kline_cache_accepting_single_source(code, 101, df, "realtime_daily_supplement")
+        state_store.set_kline(code, 101, df)
+        state_store.set_daily_bars(code, df)
+        _write_validation_report(code, "kline_101", {
+            "status": row["validation_status"],
+            "verified": row["validation_status"] == "verified",
+            "period": 101,
+            "latest_date": trade_date,
+            "latest_close": price,
+            "sources": realtime.get("validated_sources") or [realtime.get("source", "realtime")],
+            "note": "latest daily row supplemented from realtime snapshot",
+        })
+        return True
+    except Exception as e:
+        logger.warning(f"补齐当日日K失败 {code}: {e}")
+        return False
 
 
 def _write_intraday_cache(code: str, minutes: list):
@@ -721,6 +801,9 @@ def fetch_realtime_tencent_batch(codes: list) -> dict:
                     "source": "tencent_realtime",
                     "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 }
+                if len(parts) > 30 and re.fullmatch(r"\d{14}", parts[30] or ""):
+                    item["trade_datetime"] = f"{parts[30][:4]}-{parts[30][4:6]}-{parts[30][6:8]} {parts[30][8:10]}:{parts[30][10:12]}:{parts[30][12:14]}"
+                    item["trade_date"] = item["trade_datetime"][:10]
                 for level in range(1, 6):
                     bid_idx = 9 + (level - 1) * 2
                     ask_idx = 19 + (level - 1) * 2
@@ -1082,6 +1165,7 @@ def fetch_verified_realtime_batch(codes: list, require_verified_for_cache: bool 
                 _write_realtime_cache(code, merged)
             else:
                 _write_realtime_candidate_cache(code, merged)
+            supplement_daily_kline_from_realtime(code, merged)
             results[code] = merged
         else:
             cached = read_realtime_cache(code)
@@ -1112,6 +1196,7 @@ def _validate_latest_kline_with_snapshots(code: str, df: pd.DataFrame, period: i
         snapshots = {
             "sina": fetch_realtime_sina_batch([code]).get(code),
             "ths": fetch_realtime_ths(code),
+            "tencent": fetch_realtime_tencent_batch([code]).get(code),
         }
         checks = []
         for source, snap in snapshots.items():
@@ -2293,6 +2378,11 @@ def fetch_kline(code: str, period: int = 101, days: int = 120, allow_fallback: b
                 state_store.set_daily_bars(code, trusted_df)
                 _write_kline_cache(code, 101, trusted_df)
                 return trusted_df
+            if candidate_df is not None and not candidate_df.empty:
+                _write_kline_cache_accepting_single_source(code, 101, candidate_df, "fallback_public_source_after_validation")
+                state_store.set_kline(code, 101, candidate_df)
+                state_store.set_daily_bars(code, candidate_df)
+                return candidate_df
             cached = _read_kline_cache(code, period, days)
             if cached is not None:
                 return cached

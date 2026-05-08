@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
@@ -1420,18 +1420,19 @@
   </div>
   <div class="toast" id="toast"></div>
   <div class="login-gate" id="loginGate">
-    <div class="login-card">
-      <h2 class="login-title">账号登录</h2>
-      <p class="login-sub">本站实行邀请制，不能自行注册。第一行可输入账号或手机号；也可以切换为手机号验证码登录。</p>
-      <div class="field wide"><label id="loginIdLabel">账号/手机号</label><input id="loginPhone" autocomplete="username" placeholder="请输入账号或手机号"></div>
+      <div class="login-card">
+        <h2 class="login-title">账号登录</h2>
+      <p class="login-sub">本站实行邀请制，不能自行注册。第一行可输入账号、手机号或邮箱，系统会自动识别。</p>
+      <div class="field wide"><label id="loginIdLabel">账号/手机号/邮箱</label><input id="loginPhone" autocomplete="username" placeholder="请输入账号、手机号或邮箱"></div>
       <div class="field wide" id="loginPasswordField"><label>密码</label><input id="loginPassword" type="password" autocomplete="current-password" placeholder="请输入密码"></div>
-      <div class="field wide" id="loginCodeField" style="display:none"><label>验证码</label><input id="loginSmsCode" placeholder="6位字母+数字验证码"></div>
+      <div class="field wide" id="loginCodeField" style="display:none"><label>邮箱验证码</label><input id="loginSmsCode" placeholder="6位字母+数字验证码"></div>
       <div class="login-actions">
-        <button class="btn primary" onclick="login()">登录</button>
-        <button class="btn" id="loginSmsSendBtn" style="display:none" onclick="sendLoginSmsCode()">发送验证码</button>
-        <button class="btn" onclick="toggleLoginMode()" id="loginModeBtn">验证码登录</button>
+        <button class="btn primary" id="loginSubmitBtn" onclick="login()">登录</button>
+        <button class="btn" id="loginSmsSendBtn" style="display:none" onclick="sendLoginEmailCode()">发送邮箱验证码</button>
+        <button class="btn" onclick="toggleLoginMode()" id="loginModeBtn">邮箱验证码登录</button>
         <span class="note" id="loginHint">验证码发送间隔60秒，带防刷限流。</span>
       </div>
+      <div class="note" id="loginStatus" style="margin-top:10px;min-height:20px"></div>
     </div>
   </div>
 
@@ -1512,6 +1513,8 @@
       marketTab: 'all',
       ai: { providers: [], config: {}, detectResult: null },
       auth: { user: null, permissions: {}, users: [], roles: {} },
+      captcha: { config: null, loading: null },
+      email: { config: null },
       loginMode: 'password',
       brokers: { brokers: [], accounts: [] },
       agents: { agents: [], pipeline: [], logs: [] },
@@ -1527,6 +1530,7 @@
       trusteeCalendar: { target: '', year: new Date().getFullYear(), month: new Date().getMonth() + 1, selected: '', data: null },
       screeningJob: null,
       loadedSections: {},
+      loadingSections: {},
       backgroundTimers: [],
       refreshRunning: false,
       refreshQueued: false,
@@ -1844,50 +1848,192 @@
     function readonlyBanner() {
       return isReadonly() ? '<div class="readonly-banner">当前为访问账号，只能参观网站。AI API Key、风控参数、交易、托管、实盘券商接入和账号管理均禁止修改。</div>' : '';
     }
+    function setLoginStatus(text, isError = false) {
+      const el = document.getElementById('loginStatus');
+      if (!el) return;
+      el.textContent = text || '';
+      el.style.color = isError ? '#dc2626' : '';
+    }
+    function applyLoginModeUI() {
+      const emailMode = state.loginMode === 'sms';
+      document.getElementById('loginPasswordField').style.display = emailMode ? 'none' : '';
+      document.getElementById('loginCodeField').style.display = emailMode ? '' : 'none';
+      document.getElementById('loginSmsSendBtn').style.display = emailMode ? '' : 'none';
+      document.getElementById('loginModeBtn').textContent = emailMode ? '密码登录' : '邮箱验证码登录';
+      document.getElementById('loginIdLabel').textContent = emailMode ? '邮箱号' : '账号/手机号/邮箱';
+      document.getElementById('loginPhone').placeholder = emailMode ? '请输入邮箱号' : '请输入账号、手机号或邮箱';
+      document.getElementById('loginHint').textContent = emailMode ? '请输入邮箱号后发送验证码，验证码发送间隔60秒，带防刷限流。' : '密码登录支持账号、手机号或邮箱自动识别。';
+      setLoginStatus('');
+    }
     function toggleLoginMode() {
       state.loginMode = state.loginMode === 'sms' ? 'password' : 'sms';
-      document.getElementById('loginPasswordField').style.display = state.loginMode === 'sms' ? 'none' : '';
-      document.getElementById('loginCodeField').style.display = state.loginMode === 'sms' ? '' : 'none';
-      document.getElementById('loginSmsSendBtn').style.display = state.loginMode === 'sms' ? '' : 'none';
-      document.getElementById('loginModeBtn').textContent = state.loginMode === 'sms' ? '密码登录' : '验证码登录';
-      document.getElementById('loginIdLabel').textContent = state.loginMode === 'sms' ? '手机号' : '账号/手机号';
+      applyLoginModeUI();
+    }
+    async function loadCaptchaConfig() {
+      if (state.captcha.config) return state.captcha.config;
+      const cfg = await fetch(API_BASE + '/api/v1/auth/email/config').then(r => r.json()).catch(() => ({ ok: false, enabled: false }));
+      state.email.config = cfg;
+      return cfg;
+    }
+    async function sendEmailCode(email, purpose, phone = '') {
+      const res = await fetch(API_BASE + '/api/v1/auth/email/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {}) },
+        body: JSON.stringify({ email, purpose, phone })
+      }).then(r => r.json()).catch(e => ({ ok: false, error: e.message }));
+      toast(res.ok ? `${res.message}${res.email_masked ? `（${res.email_masked}）` : ''}` : (res.error || '验证码发送失败'));
+      return res;
+    }
+    async function loadCaptchaConfig() {
+      if (state.captcha.config) return state.captcha.config;
+      const cfg = await fetch(API_BASE + '/api/v1/auth/captcha/config').then(r => r.json()).catch(() => ({ ok: false, enabled: false, app_id: '' }));
+      state.captcha.config = cfg;
+      return cfg;
+    }
+    async function ensureTencentCaptchaScript() {
+      if (window.TencentCaptcha) return true;
+      if (state.captcha.loading) return state.captcha.loading;
+      state.captcha.loading = new Promise((resolve) => {
+        const script = document.createElement('script');
+        script.src = 'https://turing.captcha.qcloud.com/TCaptcha.js';
+        script.async = true;
+        script.onload = () => resolve(true);
+        script.onerror = () => resolve(false);
+        document.head.appendChild(script);
+      });
+      return state.captcha.loading;
+    }
+    async function runTencentCaptcha() {
+      const cfg = await loadCaptchaConfig();
+      if (!cfg.enabled) return {};
+      if (!cfg.app_id) return { error: '腾讯验证码 AppId 未配置。' };
+      const ready = await ensureTencentCaptchaScript();
+      if (!ready || !window.TencentCaptcha) return { error: '腾讯验证码脚本加载失败。' };
+      return new Promise((resolve) => {
+        try {
+          const captcha = new TencentCaptcha(cfg.app_id, (res) => {
+            if (!res || res.ret !== 0) {
+              resolve({ error: '人机验证已取消或失败。' });
+              return;
+            }
+            resolve({ captcha_ticket: res.ticket, captcha_randstr: res.randstr });
+          });
+          captcha.show();
+        } catch (e) {
+          resolve({ error: e.message || '腾讯验证码失败。' });
+        }
+      });
     }
     async function sendSmsCode(phone, purpose) {
+      const captcha = await runTencentCaptcha();
+      if (captcha.error) {
+        toast(captcha.error);
+        return { ok: false, error: captcha.error };
+      }
       const res = await fetch(API_BASE + '/api/v1/auth/sms/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {}) },
-        body: JSON.stringify({ phone, purpose })
+        body: JSON.stringify({ phone, purpose, ...captcha })
       }).then(r => r.json()).catch(e => ({ ok: false, error: e.message }));
       toast(res.ok ? `${res.message}${res.dev_hint ? ' 开发模式请看 sms_dev.log。' : ''}` : (res.error || '验证码发送失败'));
       return res;
     }
-    async function sendLoginSmsCode() {
-      const phone = document.getElementById('loginPhone')?.value.trim() || '';
-      if (!phone) return toast('请先输入手机号');
-      await sendSmsCode(phone, 'login');
+    async function sendLoginEmailCode() {
+      const login = document.getElementById('loginPhone')?.value.trim() || '';
+      if (!login) {
+        setLoginStatus('请先输入邮箱号。', true);
+        return toast('请先输入邮箱号');
+      }
+      if (!login.includes('@')) {
+        setLoginStatus('邮箱验证码登录请填写邮箱号。', true);
+        return toast('邮箱验证码登录请填写邮箱号。');
+      }
+      const btn = document.getElementById('loginSmsSendBtn');
+      const oldText = btn?.textContent || '发送邮箱验证码';
+      const progress = startProgressToast('正在发送邮箱验证码...');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = '发送中...';
+      }
+      try {
+        setLoginStatus('正在发送邮箱验证码...');
+        const payload = { email: login, purpose: 'login' };
+        const res = await api('/api/v1/auth/email/send', { method: 'POST', body: JSON.stringify(payload) }).catch(e => ({ ok: false, error: e.message }));
+        if (!res.ok) {
+          progress.fail(res.error || '邮箱验证码发送失败');
+          setLoginStatus(res.error || '邮箱验证码发送失败。', true);
+          return toast(res.error || '邮箱验证码发送失败');
+        }
+        progress.done('邮箱验证码已发送');
+        setLoginStatus(`${res.message || '邮箱验证码已发送'}${res.email_masked ? `（${res.email_masked}）` : ''}`);
+        toast(`${res.message || '邮箱验证码已发送'}${res.email_masked ? `（${res.email_masked}）` : ''}`);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = oldText;
+        }
+      }
     }
     async function login() {
-      const phone = document.getElementById('loginPhone')?.value.trim() || '';
+      const loginId = document.getElementById('loginPhone')?.value.trim() || '';
       const password = document.getElementById('loginPassword')?.value || '';
       const code = document.getElementById('loginSmsCode')?.value.trim() || '';
-      const endpoint = state.loginMode === 'sms' ? '/api/v1/auth/sms-login' : '/api/v1/auth/login';
-      const body = state.loginMode === 'sms' ? { phone, code } : { login: phone, password };
-      const res = await fetch(API_BASE + endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      }).then(r => r.json()).catch(e => ({ ok: false, error: e.message }));
-      if (!res.ok) return toast(res.error || '登录失败');
-      AUTH_TOKEN = res.token || '';
-      sessionStorage.setItem('lh_auth_token', AUTH_TOKEN);
-      state.auth.user = res.user || null;
-      state.auth.permissions = (res.user || {}).permissions || {};
-      hideLoginGate();
-      toast(`已登录：${(state.auth.user || {}).name || phone}`);
-      await refreshAuth(false);
-      initNav();
-      refreshAll();
+      if (!loginId) {
+        setLoginStatus(state.loginMode === 'sms' ? '请先输入邮箱号。' : '请先输入账号、手机号或邮箱。', true);
+        return toast(state.loginMode === 'sms' ? '请先输入邮箱号' : '请先输入账号、手机号或邮箱');
+      }
+      if (state.loginMode === 'password' && !password) {
+        setLoginStatus('请先输入密码。', true);
+        return toast('请先输入密码');
+      }
+      if (state.loginMode === 'sms' && !code) {
+        setLoginStatus('请先输入邮箱验证码。', true);
+        return toast('请先输入邮箱验证码');
+      }
+      const endpoint = state.loginMode === 'sms' ? '/api/v1/auth/email-login' : '/api/v1/auth/login';
+      if (state.loginMode === 'sms' && !loginId.includes('@')) {
+        setLoginStatus('邮箱验证码登录请填写邮箱号。', true);
+        return toast('邮箱验证码登录请填写邮箱号。');
+      }
+      const body = state.loginMode === 'sms' ? { email: loginId, code } : { login: loginId, password };
+      const submitBtn = document.getElementById('loginSubmitBtn');
+      const progress = startProgressToast('正在登录，请稍候...');
+      if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = '登录中...';
+      }
+      setLoginStatus('正在登录，请稍候...');
+      try {
+        const res = await api(endpoint, {
+          method: 'POST',
+          timeout: 15000,
+          body: JSON.stringify(body)
+        }).catch(e => ({ ok: false, error: e.message }));
+        if (!res.ok) {
+          const msg = res.error || '登录失败，请检查账号、密码或验证码后重试。';
+          progress.fail(msg);
+          setLoginStatus(msg, true);
+          return toast(msg);
+        }
+        progress.done('登录成功');
+        setLoginStatus('登录成功，正在进入系统...');
+        AUTH_TOKEN = res.token || '';
+        sessionStorage.setItem('lh_auth_token', AUTH_TOKEN);
+        state.auth.user = res.user || null;
+        state.auth.permissions = (res.user || {}).permissions || {};
+        hideLoginGate();
+        toast(`已登录：${(state.auth.user || {}).name || loginId}`);
+        await refreshAuth(false);
+        initNav();
+        refreshAll();
+      } finally {
+        if (submitBtn) {
+          submitBtn.disabled = false;
+          submitBtn.textContent = '登录';
+        }
+      }
     }
+    applyLoginModeUI();
     async function logout() {
       await api('/api/v1/auth/logout', { method: 'POST' }).catch(() => ({}));
       AUTH_TOKEN = '';
@@ -2304,7 +2450,7 @@
       state.openNavGroups = group && !group.direct ? [group.id] : [];
       initNav();
       render();
-      ensureSectionData(id);
+      loadSectionData(id);
       if (id === 'tradeReview' && !(state.tradeReview.rows || []).length) loadTradeReviews({ offset: 0 });
     }
 
@@ -2576,6 +2722,19 @@
         if (id === 'ai' && !state.loadedSections.ai) return refreshAIData();
         if (id === 'accounts') return refreshAccountsData();
         if (id === 'agents' && !state.loadedSections.agents) return refreshAgentsData();
+      }
+      async function loadSectionData(id) {
+        if (!id) return;
+        if (state.loadingSections[id]) return;
+        if (state.loadedSections[id]) return ensureSectionData(id);
+        state.loadingSections[id] = true;
+        if (state.active === id) render();
+        try {
+          return await ensureSectionData(id);
+        } finally {
+          delete state.loadingSections[id];
+          if (state.active === id) render();
+        }
       }
 
     async function refreshAll() {
@@ -3197,7 +3356,10 @@
       const api_key = document.getElementById('chatAiApiKey')?.value.trim() || '';
       const selected_model = document.getElementById('chatAiModel')?.value.trim() || '';
       const enabled = !!document.getElementById('chatAiEnabled')?.checked;
-      const res = await api('/api/v1/ai/chat-assistant/config', { method: 'POST', body: JSON.stringify({ provider, base_url, api_key, selected_model, enabled }) }).catch(e => ({ ok: false, error: e.message }));
+      const res = await api('/api/v1/ai/chat-assistant/config', {
+        method: 'POST',
+        body: JSON.stringify({ provider, base_url, api_key, selected_model, enabled })
+      }).catch(e => ({ ok: false, error: e.message }));
       if (res.config) state.ai.config = res.config;
       if (showToast && state.active === 'ai') renderAI();
       if (showToast) toast(res.ok ? '小窗AI模型配置已保存' : (res.error || '保存失败'));
@@ -3208,13 +3370,29 @@
       const provider = document.getElementById('chatAiProvider')?.value || 'openai_compatible';
       const base_url = document.getElementById('chatAiBaseUrl')?.value.trim() || '';
       const api_key = document.getElementById('chatAiApiKey')?.value.trim() || '';
+      const manualModel = document.getElementById('chatAiModel')?.value.trim() || '';
       const assistant = (state.ai.config || {}).chat_assistant || {};
       if (!api_key && !assistant.has_api_key) return toast('请先填写小窗AI模型密钥');
       toast('正在检测小窗AI模型...');
-      const res = await api('/api/v1/ai/chat-assistant/models/detect', { method: 'POST', timeout: 60000, body: JSON.stringify({ provider, base_url, api_key, save: true }) }).catch(e => ({ ok: false, error: e.message }));
+      const res = await api('/api/v1/ai/chat-assistant/models/detect', {
+        method: 'POST',
+        timeout: 60000,
+        body: JSON.stringify({ provider, base_url, api_key, selected_model: manualModel, save: true })
+      }).catch(e => ({ ok: false, error: e.message }));
       state.ai.chatDetectResult = res;
-      if (res.ok) { await refreshAIConfig(false); toast(`小窗AI模型检测成功：找到 ${res.model_count || (res.models || []).length} 个模型`); }
-      else { toast(`${res.error || '模型检测失败'}；如果你知道模型名，可以手动填写后保存。`); }
+      if (res.ok) {
+        await refreshAIConfig(false);
+        if (res.manual_model_saved) {
+          toast(res.probe && res.probe.ok ? '中转站不支持模型列表，已保存手动模型，并且轻量调用验证通过。' : '中转站不支持模型列表，已保存手动模型；轻量调用未通过，建议检查模型名。');
+        } else {
+          toast(`小窗AI模型检测成功：找到 ${res.model_count || (res.models || []).length} 个模型`);
+        }
+      } else if (manualModel) {
+        const saved = await saveChatAssistantConfig(false);
+        toast(saved.ok ? '模型列表检测失败，但已保留你手动填写的模型名。' : `模型检测失败，手动模型保存也失败：${saved.error || '未知错误'}`);
+      } else {
+        toast(`${res.error || '模型检测失败'}；如果中转站不支持模型列表，请填写模型名后点“检测小窗模型”或“保存小窗模型”。`);
+      }
       renderAI();
     }
     async function selectChatAssistantModel(modelId) {
@@ -3223,7 +3401,11 @@
       const provider = document.getElementById('chatAiProvider')?.value || ((state.ai.config || {}).chat_assistant || {}).provider || 'openai_compatible';
       const input = document.getElementById('chatAiModel');
       if (input) input.value = modelId;
-      const res = await api('/api/v1/ai/chat-assistant/models/select', { method: 'POST', body: JSON.stringify({ model_id: modelId, provider }) }).catch(e => ({ ok: false, error: e.message }));
+      toast(`正在切换小窗AI模型：${modelId}`);
+      const res = await api('/api/v1/ai/chat-assistant/models/select', {
+        method: 'POST',
+        body: JSON.stringify({ model_id: modelId, provider })
+      }).catch(e => ({ ok: false, error: e.message }));
       if (res.config) state.ai.config = res.config;
       renderAI();
       toast(res.ok ? '小窗AI模型已保存' : (res.error || '保存失败'));
@@ -3532,6 +3714,18 @@
     function kv(label, value) {
       return `<div class="kv-row"><span>${label}</span><strong>${safeText(value)}</strong></div>`;
     }
+    function isSectionLoading(id = state.active) {
+      return !!state.loadingSections[id] && !state.loadedSections[id];
+    }
+    function loadingText(id = state.active, emptyText = '暂无信息') {
+      return isSectionLoading(id) ? '信息正在获取中...' : emptyText;
+    }
+    function emptyBlock(emptyText = '暂无信息', id = state.active) {
+      return `<div class="loading">${loadingText(id, emptyText)}</div>`;
+    }
+    function emptyRow(colspan, emptyText = '暂无信息', id = state.active) {
+      return `<tr><td colspan="${colspan}">${emptyBlock(emptyText, id)}</td></tr>`;
+    }
 
     function renderDashboard() {
       const universe = state.marketCache.stock_universe || {};
@@ -3592,7 +3786,7 @@
     }
     function renderMiniScreening() {
       const list = state.screening.slice(0, 5);
-      if (!list.length) return '<div class="loading">暂无选股结果</div>';
+      if (!list.length) return emptyBlock('暂无选股结果', 'screening');
       return list.map((s, i) => `<div class="kv-row" style="grid-template-columns:36px minmax(0,1fr) 70px;cursor:pointer" onclick="openStock('${s.code}')"><span>${i + 1}</span><strong>${escapeHtml(s.name || s.code)}</strong><strong class="up">${safeText(s.score)}</strong></div>`).join('');
     }
     const MARKET_TABS = [
@@ -3669,7 +3863,7 @@
               <td class="num">${amount(s.amount)}</td>
               <td>${escapeHtml(s.market || '')}</td>
               <td><button class="btn" onclick="event.stopPropagation();openStock('${s.code}')">详情</button> <button class="btn" onclick="event.stopPropagation();quickAddToWatchlist('${s.code}')">自选</button></td>
-            </tr>`).join('') || '<tr><td colspan="6"><div class="loading">暂无行情数据</div></td></tr>'}</tbody>
+            </tr>`).join('') || emptyRow(6, '暂无行情数据', 'market')}</tbody>
         </table></div>`}`;
     }
     function renderWatchlist() {
@@ -3845,7 +4039,7 @@
             <td>${renderScreeningContext(s)}</td>
             <td>${escapeHtml(s.reason || '')}</td><td><span class="badge ${s.risk_level === 'low' ? 'green' : (s.risk_level === 'medium' ? 'orange' : 'red')}">${riskLevelName(s.risk_level)}</span></td>
             <td><button class="btn" onclick="event.stopPropagation();quickAddToWatchlist('${s.code}')">自选</button></td>
-          </tr>`).join('') || '<tr><td colspan="8"><div class="loading">暂无选股结果</div></td></tr>'}</tbody>
+          </tr>`).join('') || emptyRow(8, '暂无选股结果', 'screening')}</tbody>
         </table></div>`;
     }
     function screeningFactorName(key) {
@@ -3991,7 +4185,7 @@
           <td>${escapeHtml(r.ai_reason || '\u7b49\u5f85\u66f4\u591a\u884c\u60c5\u3001K\u7ebf\u3001\u8d44\u91d1\u548c\u65b0\u95fb\u8bc1\u636e\u786e\u8ba4\u3002')}<div class="stock-code">${escapeHtml(youziLine)}</div></td>
           <td><button class="btn danger" onclick="event.stopPropagation();removeAIRecommendation('${r.code}')">\u5220\u9664</button></td>
         </tr>`;
-      }).join('') || `<tr><td colspan="9"><div class="loading">${emptyText}</div></td></tr>`;
+      }).join('') || emptyRow(9, emptyText, 'signals');
     }
     function renderAIReviewedCandidateRows(rows, emptyText) {
       return rows.map(r => {
@@ -4008,7 +4202,7 @@
           <td>${escapeHtml(r.ai_reason || 'AI已复核，但未达到推荐购买条件。')}<div class="stock-code">${escapeHtml(youziLine)}</div></td>
           <td><button class="btn blue" onclick="event.stopPropagation();runSingleStockAIAnalysis('${r.code}')">单股AI判断</button></td>
         </tr>`;
-      }).join('') || `<tr><td colspan="9"><div class="loading">${emptyText}</div></td></tr>`;
+      }).join('') || emptyRow(9, emptyText, 'signals');
     }
     function buildShortShockPool() {
       return (state.screening || [])
@@ -4145,7 +4339,7 @@
       }).sort((a, b) => b.upProb - a.upProb);
     }
     function renderSignalCards(list, type) {
-      if (!list.length) return '<div class="loading">暂无信号</div>';
+      if (!list.length) return emptyBlock('暂无信号', 'signals');
       return list.map(s => `<div class="score-cell" style="margin-bottom:10px;cursor:pointer" onclick="openStock('${s.code}')"><div style="display:flex;justify-content:space-between;gap:10px"><strong>${escapeHtml(s.name || s.code)}</strong><span class="badge ${type === 'buy' ? 'red' : 'green'}">${type === 'buy' ? '买入' : '卖出'}</span></div><div class="score-label" style="margin-top:8px">${escapeHtml(s.reason || '')}</div><div style="display:flex;justify-content:space-between;margin-top:10px"><span>${price(s.price)}</span><strong>${safeText(s.strength, 'medium')}</strong></div></div>`).join('');
     }
       function renderPortfolio() {
@@ -4207,7 +4401,7 @@
         <div class="grid cols-4">${metric('总资产', money(state.portfolio.total_asset), '模拟盘')}${metric('可用资金', money(state.portfolio.available_cash), '现金')}${metric('持仓市值', money(state.portfolio.market_value), `${state.positions.length}只`)}${metric('AI托管记录', `${trustee.event_count || 0}条`, `挂单${trustee.pending_count || 0} / 成交${trustee.fill_count || 0}`)}</div>
         <div style="height:14px"></div>
         <div class="card table-wrap"><table><thead><tr><th>股票</th><th class="num">持仓</th><th class="num">可卖</th><th class="num">成本</th><th class="num">现价</th><th class="num">浮盈</th><th class="num">止损</th></tr></thead><tbody>
-          ${state.positions.map(p => `<tr onclick="openStock('${p.code}')"><td><div class="stock-name">${escapeHtml(p.name || p.code)}</div><div class="stock-code">${escapeHtml(p.code)}</div></td><td class="num">${p.quantity}</td><td class="num">${p.available_quantity}</td><td class="num">${price(p.avg_cost)}</td><td class="num">${price(p.current_price)}</td><td class="num ${num(p.floating_profit) >= 0 ? 'up' : 'down'}">${money(p.floating_profit)}</td><td class="num up">${price(p.stop_loss)}</td></tr>`).join('') || '<tr><td colspan="7"><div class="loading">暂无持仓</div></td></tr>'}
+          ${state.positions.map(p => `<tr onclick="openStock('${p.code}')"><td><div class="stock-name">${escapeHtml(p.name || p.code)}</div><div class="stock-code">${escapeHtml(p.code)}</div></td><td class="num">${p.quantity}</td><td class="num">${p.available_quantity}</td><td class="num">${price(p.avg_cost)}</td><td class="num">${price(p.current_price)}</td><td class="num ${num(p.floating_profit) >= 0 ? 'up' : 'down'}">${money(p.floating_profit)}</td><td class="num up">${price(p.stop_loss)}</td></tr>`).join('') || emptyRow(7, '暂无持仓', 'portfolio')}
           </tbody></table></div>`;
       }
       async function connectBrokerAccount() {
@@ -4407,14 +4601,14 @@
       `).join('') || '<div class="loading">暂无板块相关新闻</div>';
     }
     function renderSectorStocks(stocks = [], loading = false) {
-      if (loading) return '<div class="loading">正在加载中...</div>';
+      if (loading) return '<div class="loading">信息正在获取中...</div>';
       return `<div class="table-wrap"><table><thead><tr><th>股票</th><th class="num">价格</th><th class="num">涨跌幅</th><th class="num">成交额</th><th>操作</th></tr></thead><tbody>${
         stocks.slice(0, 12).map(s => `<tr><td><div class="stock-name">${escapeHtml(s.name || s.code)}</div><div class="stock-code">${escapeHtml(s.code || '')}</div></td><td class="num">${price(s.price)}</td><td class="num ${clsByPct(s.pct_change)}">${pct(s.pct_change)}</td><td class="num">${amount(s.amount)}</td><td><button class="btn" onclick="openStock('${escapeHtml(s.code)}')">详情</button></td></tr>`).join('')
         || '<tr><td colspan="5"><div class="loading">暂无成分股数据</div></td></tr>'
       }</tbody></table></div>`;
     }
     function renderSectorTimeline(news = [], loading = false) {
-      if (loading) return '<div class="loading">正在加载中...</div>';
+      if (loading) return '<div class="loading">信息正在获取中...</div>';
       const rows = (news || []).slice(0, 80);
       if (!rows.length) return '<div class="loading">暂无板块利好利空时间线</div>';
       const groups = [];
@@ -4445,7 +4639,7 @@
     function renderSectorDetail() {
       const d = state.sectorDetail;
       if (!state.activeSector) return '<div class="card pad"><div class="loading">点击左侧任一板块查看详情。</div></div>';
-      if (!d) return '<div class="card pad"><div class="loading">正在加载板块详情...</div></div>';
+      if (!d) return '<div class="card pad"><div class="loading">信息正在获取中...</div></div>';
       const flow = d.money_flow || {};
       const summary = d.summary || {};
       const stats = d.news_stats || {};
@@ -4517,7 +4711,7 @@
                   </div>
                 </div>
                 <div class="num ${num(s.main_net_inflow) >= 0 ? 'up' : 'down'}">${amount(s.main_net_inflow)}</div>
-              </div>`).join('') || '<div class="loading">暂无板块数据，点击刷新板块资金流。</div>'}</div>
+              </div>`).join('') || emptyBlock('暂无板块数据，点击刷新板块资金流。', 'sectors')}</div>
           </div>
           <div class="sector-detail-scroll">${renderSectorDetail()}</div>
         </div>`;
@@ -4553,7 +4747,7 @@
               <strong>${escapeHtml(n.title || '')}</strong>
               <div class="note">${escapeHtml((n.sector_tags || []).join(' / ') || 'A股整体')} · ${escapeHtml(sources || '未知来源')}</div>
             </div>`;
-          }).join('') || '<div class="loading">暂无重要新闻</div>'}</div></div>
+          }).join('') || emptyBlock('暂无重要新闻', 'news')}</div></div>
           <div class="card"><div class="panel-title">最新时间流</div><div class="news-scroll">${flow.map((n, i) => {
             const sources = (n.duplicate_sources || [n.source]).filter(Boolean).join(' / ');
             return `<div class="news-card ${newsToneClass(n)}" onclick="showNewsDetail(${i}, 'news')">
@@ -4561,7 +4755,7 @@
               <strong>${escapeHtml(n.title || '')}</strong>
               <div class="note">${escapeHtml((n.sector_tags || []).join(' / ') || 'A股整体')} · ${escapeHtml(sources || '未知来源')}</div>
             </div>`;
-          }).join('') || '<div class="loading">暂无新闻</div>'}</div></div>
+          }).join('') || emptyBlock('暂无新闻', 'news')}</div></div>
         </div>`;
     }
     function renderRisk() {
@@ -4569,7 +4763,7 @@
         ${head('风控黑盒', '仓位、交易频率、熔断和风控参数统一可视化。')}
         <div class="grid cols-4">${metric('总仓位', `${safeText(state.risk.exposure_pct, 0)}%`, '最大80%')}${metric('日亏损限制', money(state.risk.daily_loss_limit), state.risk.daily_loss_halt ? '已触发' : '未触发', state.risk.daily_loss_halt ? 'up' : '')}${metric('今日交易', `${safeText(state.risk.today_trade_count, 0)} / ${safeText(state.risk.max_daily_trades, 20)}`, '频率限制')}${metric('熔断状态', state.kill.active ? '已熔断' : '未熔断', safeText(state.kill.reason, '无'), state.kill.active ? 'up' : 'down')}</div>
         <div style="height:14px"></div>
-        <div class="card"><div class="panel-title">风控参数</div><div class="panel-body"><div class="score-grid">${Object.entries((state.risk && state.risk.config) || {}).map(([k, v]) => `<div class="score-cell"><div class="score-label">${riskConfigName(k)}</div><div class="score-value" style="font-size:16px">${safeText(v)}</div></div>`).join('') || '<div class="loading">暂无风控参数</div>'}</div></div></div>`;
+        <div class="card"><div class="panel-title">风控参数</div><div class="panel-body"><div class="score-grid">${Object.entries((state.risk && state.risk.config) || {}).map(([k, v]) => `<div class="score-cell"><div class="score-label">${riskConfigName(k)}</div><div class="score-value" style="font-size:16px">${safeText(v)}</div></div>`).join('') || emptyBlock('暂无风控参数', 'risk')}</div></div></div>`;
     }
     function riskConfigName(key) {
       return ({
@@ -4612,6 +4806,7 @@
       const riskModels = (verifier.available_models && verifier.available_models.length) ? verifier.available_models : ((state.ai.riskDetectResult || {}).models || []);
       const chatProviderId = chatAssistant.provider || 'openai_compatible';
       const chatProviderOptions = providers.map(p => `<option value="${escapeHtml(p.id)}" ${chatProviderId === p.id ? 'selected' : ''}>${providerDisplayName(p)}</option>`).join('');
+      const chatModels = (chatAssistant.available_models && chatAssistant.available_models.length) ? chatAssistant.available_models : ((state.ai.chatDetectResult || {}).models || []);
         document.getElementById('ai').innerHTML = `
           ${head('智能模型接口', '输入接口地址和密钥后检测模型列表，选择一个默认模型；后续新闻理解、评分、决策和风控复核统一读取这里的配置。')}
           ${readonlyBanner()}
@@ -4679,6 +4874,13 @@
             <div class="toolbar" style="margin-bottom:0">
                 ${canModifySensitive() ? '<button class="btn" onclick="saveChatAssistantConfig()">保存小窗模型</button><button class="btn primary" onclick="detectChatAssistantModels()">检测小窗模型</button>' : ''}
               <span class="note">小窗聊天链路：用户输入 -> 小窗模型理解并规划 -> 后端按计划执行 -> 小窗模型总结回答；未启用时自动回落默认模型。</span>
+            </div>
+            <div style="height:12px"></div>
+            <div class="model-list">
+              ${chatModels.length ? chatModels.map(m => `<div class="model-row ${chatAssistant.selected_model === m.id ? 'active' : ''}">
+                <div><strong>${escapeHtml(m.id)}</strong><small>${chatAssistant.selected_model === m.id ? '当前小窗规划模型' : '可选小窗模型'}</small></div>
+                  ${canModifySensitive() ? `<button class="btn ${chatAssistant.selected_model === m.id ? 'primary' : ''}" onclick="selectChatAssistantModel(${jsArg(m.id)})">${chatAssistant.selected_model === m.id ? '已选择' : '选择'}</button>` : ''}
+              </div>`).join('') : '<div class="loading">尚未检测到小窗AI模型。也可以先手动填写模型名并保存。</div>'}
             </div>
           </div>
         </div>
@@ -4808,52 +5010,53 @@
       }
       function renderAccountSelfPanel() {
         const u = state.auth.user || {};
-        const bound = !!u.phone_verified;
+        const bound = !!(u.phone_verified || u.email_verified);
         return `<div class="grid cols-2">
           <div class="card pad">
             <div class="panel-title" style="padding:0 0 12px;border-bottom:0">当前账户</div>
             <div class="kv">
               ${kv('账号', escapeHtml(u.account || u.phone || '--'))}
               ${kv('手机号', escapeHtml(u.phone || '--'))}
-              ${kv('绑定状态', bound ? '已绑定并验证' : '未绑定手机号')}
+              ${kv('邮箱', escapeHtml(u.email || '--'))}
+              ${kv('绑定状态', bound ? '已绑定并验证' : '未绑定绑定信息')}
               ${kv('角色', escapeHtml(u.role_label || u.role || '--'))}
             </div>
           </div>
           <div class="card pad">
-            <div class="panel-title" style="padding:0 0 12px;border-bottom:0">手机号与密码</div>
+            <div class="panel-title" style="padding:0 0 12px;border-bottom:0">邮箱与密码</div>
             <div class="toolbar" style="margin-bottom:10px">
-              <div class="field"><label>绑定手机号</label><input id="bindPhone" value="${escapeHtml(u.phone || '')}" placeholder="手机号"></div>
+              <div class="field"><label>绑定邮箱</label><input id="bindEmail" value="${escapeHtml(u.email || '')}" placeholder="邮箱"></div>
               <div class="field"><label>验证码</label><input id="bindPhoneCode" placeholder="6位字母+数字"></div>
-              <button class="btn" onclick="sendBindPhoneCode()">发送验证码</button>
-              <button class="btn primary" onclick="bindPhone()">绑定</button>
+              <button class="btn" onclick="sendBindPhoneCode()">发送邮箱验证码</button>
+              <button class="btn primary" onclick="bindPhone()">绑定邮箱</button>
             </div>
             <div class="toolbar" style="margin-bottom:0">
-              ${bound ? '' : '<div class="field"><label>旧密码</label><input id="oldPassword" type="password" placeholder="未绑定手机号需旧密码"></div>'}
+              ${bound ? '' : '<div class="field"><label>旧密码</label><input id="oldPassword" type="password" placeholder="未绑定邮箱需旧密码"></div>'}
               <div class="field"><label>新密码</label><input id="newPassword" type="password" placeholder="至少8位"></div>
-              ${bound ? '<div class="field"><label>短信验证码</label><input id="changePasswordCode" placeholder="6位字母+数字"></div><button class="btn" onclick="sendChangePasswordCode()">发送验证码</button>' : ''}
+              ${bound ? '<div class="field"><label>邮箱验证码</label><input id="changePasswordCode" placeholder="6位字母+数字"></div><button class="btn" onclick="sendChangePasswordCode()">发送邮箱验证码</button>' : ''}
               <button class="btn danger" onclick="changePassword()">修改密码</button>
             </div>
-            <div class="note" style="margin-top:10px">绑定手机号后，修改密码必须使用验证码；未绑定手机号时可直接通过旧密码修改。</div>
+            <div class="note" style="margin-top:10px">绑定邮箱后，修改密码必须使用邮箱验证码；未绑定时可直接通过旧密码修改。</div>
           </div>
         </div>`;
       }
       async function sendBindPhoneCode() {
-        const phone = document.getElementById('bindPhone')?.value.trim() || '';
-        await sendSmsCode(phone, 'bind_phone');
+        const email = document.getElementById('bindEmail')?.value.trim() || '';
+        await sendEmailCode(email, 'bind_account', '');
       }
       async function bindPhone() {
-        const phone = document.getElementById('bindPhone')?.value.trim() || '';
+        const email = document.getElementById('bindEmail')?.value.trim() || '';
         const code = document.getElementById('bindPhoneCode')?.value.trim() || '';
-        const res = await api('/api/v1/auth/bind-phone', { method: 'POST', body: JSON.stringify({ phone, code }) }).catch(e => ({ ok: false, error: e.message }));
+        const res = await api('/api/v1/auth/bind-account', { method: 'POST', body: JSON.stringify({ email, code }) }).catch(e => ({ ok: false, error: e.message }));
         if (!res.ok) return toast(res.error || '绑定失败');
         state.auth.user = res.user || state.auth.user;
         state.auth.permissions = (res.user || {}).permissions || state.auth.permissions;
-        toast('手机号已绑定');
+        toast('邮箱已绑定');
         renderAccounts();
       }
       async function sendChangePasswordCode() {
-        const phone = (state.auth.user || {}).phone || '';
-        await sendSmsCode(phone, 'change_password');
+        const email = (state.auth.user || {}).email || '';
+        await sendEmailCode(email, 'change_password', '');
       }
       async function changePassword() {
         const payload = {
@@ -4934,7 +5137,7 @@
             <td class="num ${num(r.coverage_pct) >= 90 ? 'up' : num(r.coverage_pct) ? 'muted' : 'down'}">${pct(r.coverage_pct)}</td>
             <td class="num">${safeText(r.candidate, 0)}</td>
             <td><span class="badge ${r.status === 'ok' ? 'green' : r.status === 'partial' ? 'gray' : 'red'}">${escapeHtml(r.status || '--')}</span></td>
-          </tr>`).join('') || '<tr><td colspan="5"><div class="loading">暂无覆盖率数据</div></td></tr>'}</tbody>
+          </tr>`).join('') || emptyRow(5, '暂无覆盖率数据', 'datahub')}</tbody>
         </table></div>
         <div style="height:14px"></div>
         <div class="grid cols-2">
@@ -5058,7 +5261,7 @@
         <div style="height:14px"></div>
         <div class="pipeline">${pipeline.map((p, i) => `<div class="pipeline-step">${i + 1}. ${escapeHtml(p)}</div>`).join('')}</div>
         <div style="height:14px"></div>
-        <div class="placeholder-grid">${agents.length ? agents.map(renderAgentCard).join('') : '<div class="card pad"><div class="loading">智能体状态加载中</div></div>'}</div>
+        <div class="placeholder-grid">${agents.length ? agents.map(renderAgentCard).join('') : `<div class="card pad">${emptyBlock('暂无智能体状态', 'agents')}</div>`}</div>
         <div style="height:14px"></div>
         <div class="card table-wrap"><table><thead><tr><th>任务</th><th>Agent</th><th>状态</th><th>阶段</th><th>进度</th><th>更新时间</th></tr></thead><tbody>${renderAgentTaskRows(tasks)}</tbody></table></div>
         <div style="height:14px"></div>
@@ -6379,8 +6582,8 @@
       });
       renderDashboard();
       refreshShell().catch(() => {});
-      ensureSectionData('dashboard').catch(() => {});
-      setTimeout(() => ensureSectionData(state.active).catch(() => {}), 250);
+      loadSectionData('dashboard').catch(() => {});
+      setTimeout(() => loadSectionData(state.active).catch(() => {}), 250);
       renderDashboard();
       setInterval(() => {
         refreshShell({ renderAfter: state.active === 'dashboard' || state.active === 'news' }).catch(() => {});

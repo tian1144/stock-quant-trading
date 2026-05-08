@@ -2,7 +2,7 @@
 chcp 65001 >nul
 setlocal
 
-set "DOMAIN=www.lianghuagongju222333.com"
+set "DOMAIN=www.ljreach.com"
 set "LOCAL_URL=http://localhost:8000"
 set "PYTHON_EXE=backend\venv\Scripts\python.exe"
 set "TUNNEL_NAME=lianghua-h5"

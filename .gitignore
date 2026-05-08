@@ -83,3 +83,9 @@ backend/data/reports/
 backend/data/sector_cache/
 backend/portfolio_state.json
 portfolio_state.json
+
+# Local private runtime/auth/deployment notes
+backend/data/auth/
+backend/data/ai_tasks/
+backend/data/patchbuild/
+SERVER_ACCESS.md
