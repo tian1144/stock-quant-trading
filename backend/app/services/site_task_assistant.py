@@ -824,13 +824,13 @@ def _sector_candidate_row(code: str, name: str, sector: dict, stock: Optional[di
     })
 
 
-def _to_float(value) -> float:
+def _to_float(value, default: float = 0.0) -> float:
     try:
         if value is None or value == "":
-            return 0.0
+            return float(default or 0.0)
         return float(value)
     except Exception:
-        return 0.0
+        return float(default or 0.0)
 
 
 def _build_investment_candidates(screening: list, ai_recs: Optional[dict] = None) -> list:
