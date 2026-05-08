@@ -2835,10 +2835,11 @@ async def detect_chat_assistant_models(
     provider: str = Body("openai_compatible", embed=True),
     base_url: str = Body("", embed=True),
     api_key: str = Body("", embed=True),
+    selected_model: str = Body("", embed=True),
     save: bool = Body(True, embed=True),
 ):
     """检测并保存右下角小窗 AI 的专用规划/对话模型。"""
-    result = ai_model_service.detect_chat_assistant_models(provider, base_url, api_key, save=save)
+    result = ai_model_service.detect_chat_assistant_models(provider, base_url, api_key, selected_model=selected_model, save=save)
     agent_workspace.record_event(
         "decision",
         "chat_assistant_model_detect",

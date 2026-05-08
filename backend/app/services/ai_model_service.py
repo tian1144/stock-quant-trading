@@ -1055,12 +1055,47 @@ def select_risk_verifier_model(model_id: str, provider: Optional[str] = None) ->
     config["updated_at"] = _now()
     _write_config(config)
     return {"ok": True, "message": "风控复核模型已保存。", "config": _public_config(config)}
-def detect_chat_assistant_models(provider: str, base_url: str, api_key: str, save: bool = True) -> dict:
+def _save_manual_chat_assistant_model(config: dict, assistant: dict, provider_id: str, base_url: str, api_key: str, model_id: str) -> dict:
+    models = assistant.get("available_models") or []
+    known_ids = {m.get("id") for m in models if isinstance(m, dict)}
+    if model_id not in known_ids:
+        models.append({"id": model_id, "name": model_id, "owned_by": "manual", "provider": provider_id})
+    assistant.update({
+        "enabled": True,
+        "provider": provider_id,
+        "provider_name": PROVIDERS[provider_id]["name"],
+        "base_url": base_url,
+        "api_key": api_key,
+        "selected_model": model_id,
+        "available_models": models,
+        "last_detected_at": _now(),
+        "last_status": "manual_model",
+        "last_error": "",
+    })
+    config["chat_assistant"] = assistant
+    config["updated_at"] = _now()
+    _write_config(config)
+    return assistant
+
+
+def _probe_chat_assistant_model(assistant: dict) -> dict:
+    text, meta = _post_chat_completion(assistant, "task_planning", "你是连接测试助手。只回复 ok。", "ping", 0.01, 20)
+    return {"ok": bool(meta.get("ok")), "answer": (text or "")[:80], "error": meta.get("error", "")}
+
+
+def _manual_chat_assistant_detect_result(config: dict, assistant: dict, provider_id: str, base_url: str, api_key: str, selected_model: str, warning: str) -> dict:
+    assistant = _save_manual_chat_assistant_model(config, assistant, provider_id, base_url, api_key, selected_model)
+    probe = _probe_chat_assistant_model(assistant)
+    return {"ok": True, "manual_model_saved": True, "probe": probe, "warning": warning, "provider": provider_id, "provider_name": PROVIDERS[provider_id]["name"], "base_url": base_url, "models": assistant.get("available_models") or [], "selected_model": selected_model, "model_count": 1, "detected_at": assistant.get("last_detected_at"), "api_key_masked": mask_key(api_key)}
+
+
+def detect_chat_assistant_models(provider: str, base_url: str, api_key: str, selected_model: str = "", save: bool = True) -> dict:
     config = _read_config_raw()
     assistant = {**_default_config()["chat_assistant"], **(config.get("chat_assistant") or {})}
     api_key = (api_key or "").strip() or assistant.get("api_key", "")
     if not api_key:
         return {"ok": False, "error": "请填写小窗AI模型 API Key。", "models": []}
+    selected_model = (selected_model or "").strip()
     provider_id = _guess_provider(provider or assistant.get("provider", ""), base_url or assistant.get("base_url", ""))
     try:
         normalized_url = _normalize_base_url(base_url or assistant.get("base_url", ""), provider_id)
@@ -1068,54 +1103,30 @@ def detect_chat_assistant_models(provider: str, base_url: str, api_key: str, sav
         return {"ok": False, "error": str(exc), "models": []}
     started = time.time()
     try:
-        response = requests.get(
-            _models_url(normalized_url, provider_id, api_key),
-            headers=_headers(provider_id, api_key),
-            timeout=TIMEOUT_SECONDS,
-        )
+        response = requests.get(_models_url(normalized_url, provider_id, api_key), headers=_headers(provider_id, api_key), timeout=TIMEOUT_SECONDS)
         if response.status_code >= 400:
+            if selected_model and save:
+                return _manual_chat_assistant_detect_result(config, assistant, provider_id, normalized_url, api_key, selected_model, f"/models 不可用，已按手动模型名保存。原始状态：HTTP {response.status_code}")
             return {"ok": False, "error": f"小窗AI模型检测失败：HTTP {response.status_code} {response.text[:300]}", "models": [], "provider": provider_id, "base_url": normalized_url}
         payload, parse_error = _parse_models_response_json(response, "小窗AI模型")
         if parse_error:
-            parse_error.update({
-                "provider": provider_id,
-                "base_url": normalized_url,
-                "latency_ms": int((time.time() - started) * 1000),
-            })
+            if selected_model and save:
+                return _manual_chat_assistant_detect_result(config, assistant, provider_id, normalized_url, api_key, selected_model, "/models 返回的不是 JSON，已按手动模型名保存。")
+            parse_error.update({"provider": provider_id, "base_url": normalized_url, "latency_ms": int((time.time() - started) * 1000)})
             return parse_error
         models = _extract_models(payload, provider_id)
         if not models:
-            return {"ok": False, "error": "接口可访问，但没有解析到小窗AI模型列表。你也可以手动填写模型名后保存。", "models": [], "provider": provider_id, "base_url": normalized_url}
-        selected = models[0]["id"]
+            if selected_model and save:
+                return _manual_chat_assistant_detect_result(config, assistant, provider_id, normalized_url, api_key, selected_model, "没有解析到模型列表，已按手动模型名保存。")
+            return {"ok": False, "error": "接口可访问，但没有解析到小窗AI模型列表。你也可以手动填写模型名并保存。", "models": [], "provider": provider_id, "base_url": normalized_url}
+        selected = selected_model or models[0]["id"]
         detected_at = _now()
         if save:
-            assistant.update({
-                "enabled": True,
-                "provider": provider_id,
-                "provider_name": PROVIDERS[provider_id]["name"],
-                "base_url": normalized_url,
-                "api_key": api_key,
-                "selected_model": selected,
-                "available_models": models,
-                "last_detected_at": detected_at,
-                "last_status": "ok",
-                "last_error": "",
-            })
+            assistant.update({"enabled": True, "provider": provider_id, "provider_name": PROVIDERS[provider_id]["name"], "base_url": normalized_url, "api_key": api_key, "selected_model": selected, "available_models": models, "last_detected_at": detected_at, "last_status": "ok", "last_error": ""})
             config["chat_assistant"] = assistant
             config["updated_at"] = _now()
             _write_config(config)
-        return {
-            "ok": True,
-            "provider": provider_id,
-            "provider_name": PROVIDERS[provider_id]["name"],
-            "base_url": normalized_url,
-            "models": models,
-            "selected_model": selected,
-            "model_count": len(models),
-            "latency_ms": int((time.time() - started) * 1000),
-            "detected_at": detected_at,
-            "api_key_masked": mask_key(api_key),
-        }
+        return {"ok": True, "provider": provider_id, "provider_name": PROVIDERS[provider_id]["name"], "base_url": normalized_url, "models": models, "selected_model": selected, "model_count": len(models), "latency_ms": int((time.time() - started) * 1000), "detected_at": detected_at, "api_key_masked": mask_key(api_key)}
     except requests.exceptions.Timeout:
         return {"ok": False, "error": "小窗AI模型检测超时，请检查 URL、网络或代理。", "models": [], "provider": provider_id, "base_url": normalized_url}
     except Exception as exc:
