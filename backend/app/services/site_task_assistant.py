@@ -524,9 +524,10 @@ def plan_site_task(job_payload: dict, task_type: str) -> dict:
     system_prompt = (
         "你是站内AI执行任务的规划器。你的工作不是回答用户，而是像真实助手一样理解目标，"
         "决定需要调用哪些站内工具、必须回答哪些点、以及回答风格。不要做关键词触发，要做语义规划。"
-        "可用工具只有：sectors, sector_money_flow, candidate_stocks, realtime_quotes, ai_recommendations, "
+        "可用工具只有：sectors, sector_money_flow, limit_moves, candidate_stocks, realtime_quotes, ai_recommendations, "
         "portfolio, orders, news, risk, strategy_memory, pdf, email。"
         "如果用户问板块、资金流、涨得猛、热门方向，必须包含 sectors 和 sector_money_flow。"
+        "如果用户问涨停、跌停、涨跌停复盘、哪些票封板或跌停，必须包含 limit_moves。"
         "如果用户问推荐股票、潜力股、买不买，必须包含 candidate_stocks、risk，并要求给原因、条件和次选。"
         "如果用户要求发送或给了邮箱，必须包含 pdf 和 email。"
         "输出必须是JSON。"
@@ -551,7 +552,7 @@ def plan_site_task(job_payload: dict, task_type: str) -> dict:
     if not parsed or not meta.get("ok"):
         return fallback
     tools = [str(x) for x in (parsed.get("tools") or []) if str(x) in {
-        "sectors", "sector_money_flow", "candidate_stocks", "realtime_quotes", "ai_recommendations",
+        "sectors", "sector_money_flow", "limit_moves", "candidate_stocks", "realtime_quotes", "ai_recommendations",
         "portfolio", "orders", "news", "risk", "strategy_memory", "pdf", "email",
     }]
     if not tools:
@@ -585,6 +586,7 @@ def collect_site_context(agent_plan: Optional[dict] = None) -> dict:
     sentiment = _call_with_timeout("sentiment", news_service.get_market_sentiment, {}) or {}
     stock_universe = _call_with_timeout("stock_universe", state_store.get_stock_universe, []) or []
     realtime = _call_with_timeout("realtime", state_store.get_all_realtime, {}) or {}
+    limit_moves = _build_limit_moves_sample(stock_universe, realtime)
     daily_bars = _call_with_timeout("daily_bars", state_store.get_all_daily_bars, {}) or {}
     portfolio = _call_with_timeout("portfolio", portfolio_manager.get_portfolio_summary, {}) or {}
     positions = (_call_with_timeout("positions", portfolio_manager.get_position_list, []) or [])[:20]
@@ -615,6 +617,7 @@ def collect_site_context(agent_plan: Optional[dict] = None) -> dict:
             "reviewed_candidates": (ai_recs.get("reviewed_candidates") or [])[:20],
         },
         "sector_rankings": sectors,
+        "limit_moves": limit_moves,
         "market_sentiment": sentiment,
         "news": news,
         "risk_status": risk_status,
@@ -726,6 +729,58 @@ def _build_sector_candidate_sample(sectors: list, limit: int = 30) -> list:
         if code and (code not in seen or row.get("score", 0) > seen[code].get("score", 0)):
             seen[code] = row
     return sorted(seen.values(), key=lambda x: x.get("score", 0), reverse=True)[:limit]
+
+
+def _build_limit_moves_sample(stock_universe, realtime: dict, limit: int = 20) -> dict:
+    universe = stock_universe.values() if isinstance(stock_universe, dict) else (stock_universe or [])
+    rows = []
+    for stock in universe:
+        if not isinstance(stock, dict):
+            continue
+        code = str(stock.get("code") or "").strip()
+        if not code:
+            continue
+        quote = {}
+        if isinstance(realtime, dict):
+            quote = realtime.get(code) or {}
+        if not quote:
+            quote = data_fetcher.read_realtime_cache(code) or {}
+        merged = {**stock, **(quote or {})}
+        pct = _to_float(merged.get("pct_change") or merged.get("change_pct") or merged.get("pct_chg"))
+        price = _to_float(merged.get("price") or merged.get("current_price") or merged.get("close"))
+        limit_up = _to_float(merged.get("limit_up"))
+        limit_down = _to_float(merged.get("limit_down"))
+        is_limit_up = bool((limit_up and price >= limit_up * 0.998) or pct >= 9.8)
+        is_limit_down = bool((limit_down and price <= limit_down * 1.002) or pct <= -9.8)
+        if not (is_limit_up or is_limit_down or abs(pct) >= 7):
+            continue
+        rows.append({
+            "code": code,
+            "name": merged.get("name") or stock.get("name") or "",
+            "price": price,
+            "pct_change": round(pct, 2),
+            "amount": _to_float(merged.get("amount")),
+            "volume_ratio": _to_float(merged.get("volume_ratio")),
+            "turnover_rate": _to_float(merged.get("turnover_rate") or merged.get("turnover")),
+            "limit_type": "limit_up" if is_limit_up else ("limit_down" if is_limit_down else "large_move"),
+            "reason": "涨停/大涨" if pct > 0 else "跌停/大跌",
+        })
+    up = sorted([r for r in rows if r["limit_type"] == "limit_up"], key=lambda x: (x.get("amount", 0), x.get("pct_change", 0)), reverse=True)
+    down = sorted([r for r in rows if r["limit_type"] == "limit_down"], key=lambda x: (abs(x.get("pct_change", 0)), x.get("amount", 0)), reverse=True)
+    large_up = sorted([r for r in rows if r["limit_type"] == "large_move" and r.get("pct_change", 0) > 0], key=lambda x: x.get("pct_change", 0), reverse=True)
+    large_down = sorted([r for r in rows if r["limit_type"] == "large_move" and r.get("pct_change", 0) < 0], key=lambda x: x.get("pct_change", 0))
+    return {
+        "limit_up": up[:limit],
+        "limit_down": down[:limit],
+        "large_up": large_up[:limit],
+        "large_down": large_down[:limit],
+        "counts": {
+            "limit_up": len(up),
+            "limit_down": len(down),
+            "large_up": len(large_up),
+            "large_down": len(large_down),
+        },
+    }
 
 
 def _sector_candidate_row(code: str, name: str, sector: dict, stock: Optional[dict] = None, source: str = "板块候选") -> dict:
@@ -843,6 +898,7 @@ def summarize_site_context(context: dict, job_payload: dict, task_type: str) -> 
             f"从 investment_candidates 中自主筛出最值得重点关注的 {target_count} 只股票。"
             "必须按用户问题直接作答，不要先套一页摘要模板；用户问板块就先回答板块，问股票就直接给股票。"
             "如果用户问当前哪些板块涨得疯狂或资金进入较大，必须使用 sector_rankings 输出3个强势板块，写清涨幅、主力净流入、龙头股和入手条件。"
+            "如果用户问哪些股票涨停跌停，必须使用 limit_moves 输出涨停股、跌停股或大涨大跌样本，并解释对应板块/情绪含义。"
             "如果用户提到今年6月，请按2026年6月这个未来月份做计划，不能假装已经发生。"
             "必须输出：结论名单、每只股票的站内证据、6月关注逻辑、买入前置条件、止损/风控、"
             "不推荐或暂缓理由、下一步执行清单。不要泄露API密钥或本地敏感配置。"
@@ -894,6 +950,14 @@ def verify_site_task_answer(markdown: str, context: dict, job_payload: dict, tas
                 )
         else:
             additions.append("- 已尝试读取/刷新板块资源，但当前未拿到有效板块榜单；建议稍后重试或先刷新板块资金流。")
+    need_limits = any(word in user_task for word in ("涨停", "跌停", "涨跌停", "封板")) and "## 涨停跌停样本" not in text
+    if need_limits:
+        moves = context.get("limit_moves") or {}
+        additions.append("## 涨停跌停样本")
+        additions.extend(_format_limit_move_lines("涨停股", moves.get("limit_up") or moves.get("large_up") or []))
+        additions.extend(_format_limit_move_lines("跌停股", moves.get("limit_down") or moves.get("large_down") or []))
+        if not (moves.get("limit_up") or moves.get("limit_down") or moves.get("large_up") or moves.get("large_down")):
+            additions.append("- 当前站内实时缓存里没有识别到涨停/跌停样本；已尝试读取实时缓存，可先刷新行情后重试。")
     need_alt = ("暂时不推荐购买" not in text and "没有可直接买入" in text) or ("次选" in required and "次选" not in text)
     if task_type == "investment_report" and need_alt:
         candidates = context.get("investment_candidates") or []
@@ -907,6 +971,19 @@ def verify_site_task_answer(markdown: str, context: dict, job_payload: dict, tas
     if additions:
         return (text.rstrip() + "\n\n" + "\n".join(additions)).strip()
     return text
+
+
+def _format_limit_move_lines(title: str, rows: list) -> list:
+    lines = [f"### {title}"]
+    if not rows:
+        lines.append("- 暂无样本。")
+        return lines
+    for item in rows[:8]:
+        lines.append(
+            f"- {item.get('code')} {item.get('name', '')}：涨跌幅 {_to_float(item.get('pct_change')):.2f}%，"
+            f"成交额 {_to_float(item.get('amount')):.0f}，量比 {_to_float(item.get('volume_ratio')):.2f}。"
+        )
+    return lines
 
 
 def _chat_text_with_task_timeout(task_key: str, system_prompt: str, user_message: str, context: dict) -> tuple[str, dict]:
@@ -959,6 +1036,11 @@ def _fallback_markdown_report(context: dict, reason: str, target_count: int = 3,
                 )
         else:
             lines.append("- 当前没有拿到有效板块榜单。建议先刷新板块资金流；系统会优先尝试东方财富板块接口，后续可继续补腾讯证券资源。")
+        moves = context.get("limit_moves") or {}
+        if moves.get("limit_up") or moves.get("limit_down") or moves.get("large_up") or moves.get("large_down"):
+            lines.extend(["", "## 涨停跌停样本"])
+            lines.extend(_format_limit_move_lines("涨停股", moves.get("limit_up") or moves.get("large_up") or []))
+            lines.extend(_format_limit_move_lines("跌停股", moves.get("limit_down") or moves.get("large_down") or []))
         lines.extend(["", "## 3只股票建议"])
     else:
         lines = [
