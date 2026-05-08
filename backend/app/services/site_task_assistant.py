@@ -35,7 +35,7 @@ JOBS: dict = {}
 JOBS_LOCK = threading.Lock()
 JOBS_LOADED = False
 JOB_THREADS: set[str] = set()
-SITE_TASK_AI_WAIT_SECONDS = 60
+SITE_TASK_AI_WAIT_SECONDS = int(os.environ.get("SITE_TASK_AI_WAIT_SECONDS", "180") or "180")
 SITE_TASK_COLLECT_STEP_SECONDS = 3
 
 
@@ -923,7 +923,7 @@ def summarize_site_context(context: dict, job_payload: dict, task_type: str) -> 
     )
     answer, meta = _chat_text_with_task_timeout("industry_report", system_prompt, user_message, context)
     if not meta.get("ok"):
-        answer = _fallback_markdown_report(context, meta.get("error", "AI未完成"), target_count=target_count, task_type=task_type)
+        raise RuntimeError(meta.get("error") or "AI report generation failed; local fallback is disabled.")
     markdown = answer.strip()
     if not markdown.startswith("#"):
         markdown = "# 量化智能猎人站内AI任务报告\n\n" + markdown
@@ -986,12 +986,46 @@ def _format_limit_move_lines(title: str, rows: list) -> list:
     return lines
 
 
+def _compact_context_for_ai_report(context: dict) -> dict:
+    context = context or {}
+    ai_recs = context.get("ai_recommendations") or {}
+    return _json_safe({
+        "generated_at": context.get("generated_at"),
+        "universe_count": context.get("universe_count"),
+        "realtime_count": context.get("realtime_count"),
+        "daily_kline_count": context.get("daily_kline_count"),
+        "portfolio": context.get("portfolio") or {},
+        "positions": (context.get("positions") or [])[:8],
+        "orders_tail": (context.get("orders_tail") or [])[-8:],
+        "signals": (context.get("signals") or [])[:10],
+        "screening_source": context.get("screening_source"),
+        "screening_top": (context.get("screening_top") or [])[:12],
+        "investment_candidates": (context.get("investment_candidates") or [])[:12],
+        "ai_recommendations": {
+            "summary": ai_recs.get("summary") or {},
+            "generated_at": ai_recs.get("generated_at"),
+            "recommendations": (ai_recs.get("recommendations") or [])[:8],
+            "reviewed_candidates": (ai_recs.get("reviewed_candidates") or [])[:8],
+        },
+        "sector_rankings": (context.get("sector_rankings") or [])[:8],
+        "limit_moves": context.get("limit_moves") or {},
+        "market_sentiment": context.get("market_sentiment") or {},
+        "news": (context.get("news") or [])[:8],
+        "risk_status": context.get("risk_status") or {},
+        "risk_config": context.get("risk_config") or {},
+        "kill_switch": context.get("kill_switch") or {},
+        "strategy_memory": str(context.get("strategy_memory") or "")[:2000],
+        "system_state": context.get("system_state") or {},
+        "agent_plan": context.get("agent_plan") or {},
+    })
+
+
 def _chat_text_with_task_timeout(task_key: str, system_prompt: str, user_message: str, context: dict) -> tuple[str, dict]:
     box = {"done": False, "answer": "", "meta": {}}
 
     def runner():
         try:
-            answer, meta = ai_model_service.chat_text(task_key, system_prompt, user_message, context, profile="chat_assistant")
+            answer, meta = ai_model_service.chat_text(task_key, system_prompt, user_message, _compact_context_for_ai_report(context), profile="chat_assistant")
             box.update({"done": True, "answer": answer, "meta": meta})
         except Exception as exc:
             box.update({"done": True, "answer": "", "meta": {"ok": False, "used_ai": False, "error": str(exc)}})
@@ -1004,7 +1038,7 @@ def _chat_text_with_task_timeout(task_key: str, system_prompt: str, user_message
             "ok": False,
             "used_ai": False,
             "task_key": task_key,
-            "error": f"站内任务报告AI总结超过 {SITE_TASK_AI_WAIT_SECONDS} 秒，已改用本地结构化报告兜底。",
+            "error": f"AI report generation exceeded {SITE_TASK_AI_WAIT_SECONDS} seconds. Local fallback is disabled, so no report was generated.",
             "timeout_seconds": SITE_TASK_AI_WAIT_SECONDS,
         }
     return box.get("answer") or "", box.get("meta") or {}

@@ -492,6 +492,20 @@ def _normalize_base_url(base_url: str, provider: str) -> str:
     return value.rstrip("/")
 
 
+def _model_base_url_candidates(base_url: str, provider: str) -> List[str]:
+    candidates = [base_url.rstrip("/")]
+    protocol = PROVIDERS.get(provider, PROVIDERS["openai_compatible"]).get("protocol", "openai_compatible")
+    parsed = urlparse(candidates[0])
+    path = (parsed.path or "").rstrip("/")
+    if protocol == "openai_compatible" and path in ("", "/"):
+        candidates.append(f"{candidates[0]}/v1")
+    unique = []
+    for item in candidates:
+        if item and item not in unique:
+            unique.append(item)
+    return unique
+
+
 def _models_url(base_url: str, provider: str, api_key: str) -> str:
     meta = PROVIDERS.get(provider, PROVIDERS["openai_compatible"])
     path = meta.get("models_path", "/models")
@@ -638,7 +652,21 @@ def _post_chat_completion(
                 "task_key": task_key,
                 "error": f"模型调用失败：HTTP {response.status_code} {response.text[:300]}",
             }
-        payload = response.json()
+        try:
+            payload = response.json()
+        except ValueError:
+            return None, {
+                "ok": False,
+                "used_ai": False,
+                "provider": provider,
+                "model": model,
+                "task_key": task_key,
+                "error": (
+                    "Model endpoint returned non-JSON. Check whether the Base URL needs /v1. "
+                    f"content-type={response.headers.get('content-type', 'unknown')}; "
+                    f"preview={_response_preview(response)}"
+                ),
+            }
         text = _chat_response_text(payload, provider)
         return text, {
             "ok": True,
@@ -868,6 +896,24 @@ def _extract_models(payload, provider: str) -> List[dict]:
     for model in models:
         unique[model["id"]] = model
     return sorted(unique.values(), key=lambda x: x["id"])
+
+
+def _model_key(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", (value or "").lower())
+
+
+def _resolve_model_id(selected_model: str, models: List[dict]) -> str:
+    selected_model = (selected_model or "").strip()
+    if not selected_model:
+        return (models[0].get("id") if models else "") or ""
+    known = [str(model.get("id") or "") for model in (models or []) if isinstance(model, dict)]
+    if selected_model in known:
+        return selected_model
+    selected_key = _model_key(selected_model)
+    for model_id in known:
+        if _model_key(model_id) == selected_key:
+            return model_id
+    return selected_model
 
 
 def _response_preview(response, limit: int = 180) -> str:
@@ -1103,23 +1149,31 @@ def detect_chat_assistant_models(provider: str, base_url: str, api_key: str, sel
         return {"ok": False, "error": str(exc), "models": []}
     started = time.time()
     try:
-        response = requests.get(_models_url(normalized_url, provider_id, api_key), headers=_headers(provider_id, api_key), timeout=TIMEOUT_SECONDS)
-        if response.status_code >= 400:
-            if selected_model and save:
-                return _manual_chat_assistant_detect_result(config, assistant, provider_id, normalized_url, api_key, selected_model, f"/models 不可用，已按手动模型名保存。原始状态：HTTP {response.status_code}")
-            return {"ok": False, "error": f"小窗AI模型检测失败：HTTP {response.status_code} {response.text[:300]}", "models": [], "provider": provider_id, "base_url": normalized_url}
-        payload, parse_error = _parse_models_response_json(response, "小窗AI模型")
-        if parse_error:
-            if selected_model and save:
-                return _manual_chat_assistant_detect_result(config, assistant, provider_id, normalized_url, api_key, selected_model, "/models 返回的不是 JSON，已按手动模型名保存。")
-            parse_error.update({"provider": provider_id, "base_url": normalized_url, "latency_ms": int((time.time() - started) * 1000)})
-            return parse_error
-        models = _extract_models(payload, provider_id)
+        parse_error = None
+        models = []
+        for candidate_url in _model_base_url_candidates(normalized_url, provider_id):
+            response = requests.get(_models_url(candidate_url, provider_id, api_key), headers=_headers(provider_id, api_key), timeout=TIMEOUT_SECONDS)
+            if response.status_code >= 400:
+                parse_error = {"ok": False, "error": f"Chat assistant model detect failed: HTTP {response.status_code} {_response_preview(response)}", "models": []}
+                continue
+            payload, parse_error = _parse_models_response_json(response, "Chat assistant model")
+            if parse_error:
+                continue
+            models = _extract_models(payload, provider_id)
+            if models:
+                normalized_url = candidate_url
+                break
         if not models:
             if selected_model and save:
-                return _manual_chat_assistant_detect_result(config, assistant, provider_id, normalized_url, api_key, selected_model, "没有解析到模型列表，已按手动模型名保存。")
-            return {"ok": False, "error": "接口可访问，但没有解析到小窗AI模型列表。你也可以手动填写模型名并保存。", "models": [], "provider": provider_id, "base_url": normalized_url}
-        selected = selected_model or models[0]["id"]
+                warning = "No model list was parsed from /models; saved the manual model name."
+                if parse_error and parse_error.get("response_preview"):
+                    warning = f"{warning} Last response preview: {parse_error.get('response_preview')}"
+                return _manual_chat_assistant_detect_result(config, assistant, provider_id, normalized_url, api_key, selected_model, warning)
+            if parse_error:
+                parse_error.update({"provider": provider_id, "base_url": normalized_url, "latency_ms": int((time.time() - started) * 1000)})
+                return parse_error
+            return {"ok": False, "error": "The endpoint is reachable, but no chat assistant models were parsed.", "models": [], "provider": provider_id, "base_url": normalized_url}
+        selected = _resolve_model_id(selected_model, models)
         detected_at = _now()
         if save:
             assistant.update({"enabled": True, "provider": provider_id, "provider_name": PROVIDERS[provider_id]["name"], "base_url": normalized_url, "api_key": api_key, "selected_model": selected, "available_models": models, "last_detected_at": detected_at, "last_status": "ok", "last_error": ""})
