@@ -412,6 +412,52 @@
     .model-row.active { border-color: var(--red); background: var(--red-2); }
     .model-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .model-row small { display: block; margin-top: 3px; color: var(--muted); }
+    .ai-model-panel + .ai-model-panel { margin-top: 14px; }
+    .ai-model-layout {
+      display: grid;
+      grid-template-columns: minmax(360px, .95fr) minmax(320px, 1.05fr);
+      gap: 16px;
+      align-items: start;
+    }
+    .ai-model-summary { margin-bottom: 14px; }
+    .ai-model-form {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      align-items: end;
+    }
+    .ai-model-form .wide,
+    .ai-model-form .full { min-width: 0; width: 100%; }
+    .ai-model-form .full { grid-column: 1 / -1; }
+    .ai-model-switch {
+      min-height: 40px;
+      display: flex;
+      align-items: center;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--soft);
+    }
+    .ai-model-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      margin-top: 14px;
+    }
+    .ai-model-hint { margin-top: 12px; }
+    .ai-model-meta { margin-top: 14px; }
+    .ai-model-list-head {
+      min-height: 40px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 900;
+    }
     .policy-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
     .note { color: var(--muted); font-size: 12px; line-height: 1.6; }
     .loading { padding: 26px; color: var(--muted); text-align: center; }
@@ -1235,6 +1281,7 @@
       .cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .cols-3, .placeholder-grid, .strategy-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .score-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .ai-model-layout { grid-template-columns: 1fr; }
       .sector-layout { grid-template-columns: minmax(280px, .86fr) minmax(0, 1.14fr); }
       .news-layout { grid-template-columns: 1fr; }
       .sector-scroll, .sector-detail-scroll { max-height: calc(100vh - 238px); }
@@ -1293,6 +1340,7 @@
       .ai-chat { right: 10px; bottom: 118px; width: calc(100vw - 20px); height: 70vh; min-width: 0; max-height: 70vh; resize: none; }
       .ai-chat-launch { right: 12px; bottom: 58px; }
       .field, .field.wide { width: 100%; min-width: 0; }
+      .ai-model-form { grid-template-columns: 1fr; }
     }
     @media (max-width: 420px) {
       .nav { grid-template-columns: 1fr; max-height: 42vh; overflow-y: auto; }
@@ -4876,6 +4924,33 @@
         min_cash_reserve_pct: '现金保留比例'
       })[key] || '未命名参数';
     }
+    function renderAIModelRows(rows, selectedModel, currentLabel, optionalLabel, selectHandler, emptyText) {
+      return rows.length ? rows.map(m => `<div class="model-row ${selectedModel === m.id ? 'active' : ''}">
+        <div><strong>${escapeHtml(m.id)}</strong><small>${selectedModel === m.id ? currentLabel : optionalLabel}</small></div>
+        ${canModifySensitive() ? `<button class="btn ${selectedModel === m.id ? 'primary' : ''}" onclick="${selectHandler}(${jsArg(m.id)})">${selectedModel === m.id ? '已选择' : '选择'}</button>` : ''}
+      </div>`).join('') : `<div class="loading">${emptyText}</div>`;
+    }
+    function renderAIModelPanel(options = {}) {
+      return `
+        <div class="card ai-model-panel">
+          <div class="panel-title">${options.title}<span class="note">${safeText(options.modelCount, 0)} 个模型</span></div>
+          <div class="panel-body">
+            <div class="grid cols-4 ai-model-summary">${options.metrics || ''}</div>
+            <div class="ai-model-layout">
+              <div>
+                <div class="ai-model-form">${options.form || ''}</div>
+                <div class="ai-model-actions">${options.actions || ''}</div>
+                ${options.hint ? `<div class="note ai-model-hint">${options.hint}</div>` : ''}
+                ${options.meta ? `<div class="kv ai-model-meta">${options.meta}</div>` : ''}
+              </div>
+              <div>
+                <div class="ai-model-list-head"><span>模型列表</span><span>${safeText(options.modelCount, 0)} 个</span></div>
+                <div class="model-list">${options.rows || ''}</div>
+              </div>
+            </div>
+          </div>
+        </div>`;
+    }
     function renderAI() {
       const cfg = state.ai.config || {};
       const verifier = cfg.risk_verifier || {};
@@ -4894,114 +4969,64 @@
       const chatProviderId = chatAssistant.provider || 'openai_compatible';
       const chatProviderOptions = providers.map(p => `<option value="${escapeHtml(p.id)}" ${chatProviderId === p.id ? 'selected' : ''}>${providerDisplayName(p)}</option>`).join('');
       const chatModels = (chatAssistant.available_models && chatAssistant.available_models.length) ? chatAssistant.available_models : ((state.ai.chatDetectResult || {}).models || []);
+      const mainPanel = renderAIModelPanel({
+        title: '默认主模型',
+        modelCount: models.length,
+        metrics: `${metric('接入状态', cfg.enabled ? '已启用' : '未启用', aiStatusName(cfg.last_status), cfg.enabled ? 'up' : 'muted')}
+          ${metric('默认模型', escapeHtml(cfg.selected_model || '--'), cfg.provider_name ? '已选择供应商' : '未选择')}
+          ${metric('可用模型', safeText((cfg.available_models || []).length, 0), cfg.last_detected_at || '尚未检测')}
+          ${metric('密钥状态', cfg.has_api_key ? '已保存' : '未保存', cfg.api_key_masked || '本地私有配置')}`,
+        form: `<div class="field"><label>供应商</label><select id="aiProvider" onchange="fillProviderDefault(); saveAIConnectionConfig(false)">${providerOptions || '<option value="openai_compatible">兼容网关</option>'}</select></div>
+          <div class="field wide"><label>接口地址</label><input id="aiBaseUrl" placeholder="可留空，需要自定义网关时再填写" value="${escapeHtml(cfg.base_url || '')}" oninput="state.ai.config = {...(state.ai.config || {}), base_url: this.value}" onpaste="setTimeout(() => state.ai.config = {...(state.ai.config || {}), base_url: this.value}, 0)" onblur="saveAIConnectionConfig(false)"></div>
+          <div class="field wide"><label>密钥</label><input id="aiApiKey" type="password" placeholder="${cfg.has_api_key ? cfg.api_key_masked : '请输入密钥'}"></div>`,
+        actions: `${canModifySensitive() ? '<button class="btn" onclick="saveAIConnectionConfig()">保存连接</button><button class="btn primary" onclick="detectAIModels()">检测模型</button>' : ''}
+          <button class="btn" onclick="refreshAIConfig()">刷新配置</button>
+          ${canModifySensitive() ? '<button class="btn danger" onclick="clearAIConfig()">清空配置</button>' : ''}`,
+        hint: '密钥仅保存在后端本地 JSON；接口返回时只显示脱敏状态。',
+        meta: `${kv('适配说明', providerNotes(currentProvider))}
+          ${kv('最近检测', cfg.last_detected_at || '--')}
+          ${kv('检测错误', cfg.last_error || (state.ai.detectResult || {}).error || '无')}
+          ${kv('配置位置', cfg.config_path ? '本地私有配置文件' : '未生成')}`,
+        rows: renderAIModelRows(models, cfg.selected_model, '当前默认模型', '可选模型', 'selectAIModel', '尚未检测到模型。填写接口地址和密钥后点击“检测模型”。')
+      });
+      const chatPanel = renderAIModelPanel({
+        title: '小窗AI规划模型',
+        modelCount: chatModels.length,
+        metrics: `${metric('启用状态', chatAssistant.enabled ? '已启用' : '回落主模型', chatAssistant.fallback_to_main ? '未独立接管' : '独立接管小窗', chatAssistant.enabled ? 'up' : 'muted')}
+          ${metric('小窗模型', escapeHtml(chatAssistant.selected_model || '--'), chatAssistant.provider_name || '独立规划/对话')}
+          ${metric('可用模型', safeText((chatAssistant.available_models || []).length, 0), chatAssistant.last_detected_at || '尚未检测')}
+          ${metric('密钥状态', chatAssistant.has_api_key ? '已保存' : '未保存', chatAssistant.api_key_masked || '本地私有配置')}`,
+        form: `<label class="note ai-model-switch full"><input id="chatAiEnabled" type="checkbox" ${chatAssistant.enabled ? 'checked' : ''}> 启用小窗专用模型</label>
+          <div class="field"><label>供应商</label><select id="chatAiProvider">${chatProviderOptions || '<option value="openai_compatible">兼容网关</option>'}</select></div>
+          <div class="field wide"><label>接口地址</label><input id="chatAiBaseUrl" placeholder="兼容模式填第三方中转；官方模式填官方 API Base URL" value="${escapeHtml(chatAssistant.base_url || '')}"></div>
+          <div class="field wide"><label>密钥</label><input id="chatAiApiKey" type="password" placeholder="${chatAssistant.has_api_key ? chatAssistant.api_key_masked : '请输入小窗AI密钥'}"></div>
+          <div class="field wide"><label>模型</label><input id="chatAiModel" value="${escapeHtml(chatAssistant.selected_model || '')}" placeholder="可检测后选择，也可手动填写"></div>`,
+        actions: canModifySensitive() ? '<button class="btn" onclick="saveChatAssistantConfig()">保存小窗模型</button><button class="btn primary" onclick="detectChatAssistantModels()">检测小窗模型</button>' : '',
+        hint: '小窗聊天链路：用户输入 -> 小窗模型理解并规划 -> 后端按计划执行 -> 小窗模型总结回答；未启用时自动回落默认模型。',
+        rows: renderAIModelRows(chatModels, chatAssistant.selected_model, '当前小窗规划模型', '可选小窗模型', 'selectChatAssistantModel', '尚未检测到小窗AI模型。也可以先手动填写模型名并保存。')
+      });
+      const riskPanel = renderAIModelPanel({
+        title: '独立风控交叉验证模型',
+        modelCount: riskModels.length,
+        metrics: `${metric('启用状态', verifier.enabled ? '已启用' : '未启用', verifier.last_status || 'not_configured', verifier.enabled ? 'up' : 'muted')}
+          ${metric('风控模型', escapeHtml(verifier.selected_model || '--'), verifier.provider_name || '独立于主模型')}
+          ${metric('可用模型', safeText((verifier.available_models || []).length, 0), verifier.last_detected_at || '尚未检测')}
+          ${metric('密钥状态', verifier.has_api_key ? '已保存' : '未保存', verifier.api_key_masked || '本地私有配置')}`,
+        form: `<label class="note ai-model-switch full"><input id="riskAiEnabled" type="checkbox" ${verifier.enabled ? 'checked' : ''}> 启用独立风控模型</label>
+          <div class="field"><label>供应商</label><select id="riskAiProvider">${riskProviderOptions || '<option value="openai_compatible">兼容网关</option>'}</select></div>
+          <div class="field wide"><label>接口地址</label><input id="riskAiBaseUrl" placeholder="建议填另一家AI或另一个网关URL" value="${escapeHtml(verifier.base_url || '')}"></div>
+          <div class="field wide"><label>密钥</label><input id="riskAiApiKey" type="password" placeholder="${verifier.has_api_key ? verifier.api_key_masked : '请输入另一套密钥'}"></div>
+          <div class="field wide"><label>模型</label><input id="riskAiModel" value="${escapeHtml(verifier.selected_model || '')}" placeholder="可检测后选择，也可手动填写"></div>`,
+        actions: canModifySensitive() ? '<button class="btn" onclick="saveRiskVerifierConfig()">保存风控模型</button><button class="btn primary" onclick="detectRiskVerifierModels()">检测风控模型</button>' : '',
+        hint: '这个模型只参与风控交叉验证；若它否决，风控报告会限制或禁止执行。',
+        rows: renderAIModelRows(riskModels, verifier.selected_model, '当前风控复核模型', '可选风控模型', 'selectRiskVerifierModel', '尚未检测到独立风控模型。也可以先手动填写模型名并保存。')
+      });
         document.getElementById('ai').innerHTML = `
           ${head('智能模型接口', '输入接口地址和密钥后检测模型列表，选择一个默认模型；后续新闻理解、评分、决策和风控复核统一读取这里的配置。')}
           ${readonlyBanner()}
-        <div class="grid cols-4">
-          ${metric('接入状态', cfg.enabled ? '已启用' : '未启用', aiStatusName(cfg.last_status), cfg.enabled ? 'up' : 'muted')}
-          ${metric('默认模型', escapeHtml(cfg.selected_model || '--'), cfg.provider_name ? '已选择供应商' : '未选择')}
-          ${metric('可用模型', safeText((cfg.available_models || []).length, 0), cfg.last_detected_at || '尚未检测')}
-          ${metric('密钥状态', cfg.has_api_key ? '已保存' : '未保存', cfg.api_key_masked || '本地私有配置')}
-        </div>
-        <div style="height:14px"></div>
-        <div class="grid cols-2">
-          <div class="card">
-            <div class="panel-title">模型检测</div>
-            <div class="panel-body">
-              <div class="toolbar">
-                <div class="field"><label>供应商</label><select id="aiProvider" onchange="fillProviderDefault(); saveAIConnectionConfig(false)">${providerOptions || '<option value="openai_compatible">兼容网关</option>'}</select></div>
-                <div class="field wide"><label>接口地址</label><input id="aiBaseUrl" placeholder="可留空，需要自定义网关时再填写" value="${escapeHtml(cfg.base_url || '')}" oninput="state.ai.config = {...(state.ai.config || {}), base_url: this.value}" onpaste="setTimeout(() => state.ai.config = {...(state.ai.config || {}), base_url: this.value}, 0)" onblur="saveAIConnectionConfig(false)"></div>
-                <div class="field wide"><label>密钥</label><input id="aiApiKey" type="password" placeholder="${cfg.has_api_key ? cfg.api_key_masked : '请输入密钥'}"></div>
-              </div>
-              <div class="toolbar" style="margin-bottom:0">
-                  ${canModifySensitive() ? '<button class="btn" onclick="saveAIConnectionConfig()">保存连接</button><button class="btn primary" onclick="detectAIModels()">检测模型</button>' : ''}
-                  <button class="btn" onclick="refreshAIConfig()">刷新配置</button>
-                  ${canModifySensitive() ? '<button class="btn danger" onclick="clearAIConfig()">清空配置</button>' : ''}
-                <span class="note">密钥仅保存在后端本地 JSON；接口返回时只显示脱敏状态。</span>
-              </div>
-              <div style="height:12px"></div>
-              <div class="kv">
-                ${kv('适配说明', providerNotes(currentProvider))}
-                ${kv('最近检测', cfg.last_detected_at || '--')}
-                ${kv('检测错误', cfg.last_error || (state.ai.detectResult || {}).error || '无')}
-                ${kv('配置位置', cfg.config_path ? '本地私有配置文件' : '未生成')}
-              </div>
-            </div>
-          </div>
-          <div class="card">
-            <div class="panel-title">模型列表 <span class="note">${models.length} 个</span></div>
-            <div class="panel-body">
-              <div class="model-list">
-                ${models.length ? models.map(m => `<div class="model-row ${cfg.selected_model === m.id ? 'active' : ''}">
-                  <div><strong>${escapeHtml(m.id)}</strong><small>${cfg.selected_model === m.id ? '当前默认模型' : '可选模型'}</small></div>
-                    ${canModifySensitive() ? `<button class="btn ${cfg.selected_model === m.id ? 'primary' : ''}" onclick="selectAIModel(${jsArg(m.id)})">${cfg.selected_model === m.id ? '已选择' : '选择'}</button>` : ''}
-                </div>`).join('') : '<div class="loading">尚未检测到模型。填写接口地址和密钥后点击“检测模型”。</div>'}
-              </div>
-            </div>
-          </div>
-        </div>
-        <div style="height:14px"></div>
-        <div class="card">
-          <div class="panel-title">小窗AI规划模型</div>
-          <div class="panel-body">
-            <div class="grid cols-4">
-              ${metric('启用状态', chatAssistant.enabled ? '已启用' : '回落主模型', chatAssistant.fallback_to_main ? '未独立接管' : '独立接管小窗', chatAssistant.enabled ? 'up' : 'muted')}
-              ${metric('小窗模型', escapeHtml(chatAssistant.selected_model || '--'), chatAssistant.provider_name || '独立规划/对话')}
-              ${metric('可用模型', safeText((chatAssistant.available_models || []).length, 0), chatAssistant.last_detected_at || '尚未检测')}
-              ${metric('密钥状态', chatAssistant.has_api_key ? '已保存' : '未保存', chatAssistant.api_key_masked || '本地私有配置')}
-            </div>
-            <div style="height:12px"></div>
-            <div class="toolbar">
-              <label class="note"><input id="chatAiEnabled" type="checkbox" ${chatAssistant.enabled ? 'checked' : ''}> 启用小窗专用模型</label>
-              <div class="field"><label>供应商</label><select id="chatAiProvider">${chatProviderOptions || '<option value="openai_compatible">兼容网关</option>'}</select></div>
-              <div class="field wide"><label>接口地址</label><input id="chatAiBaseUrl" placeholder="兼容模式填第三方中转；官方模式填官方 API Base URL" value="${escapeHtml(chatAssistant.base_url || '')}"></div>
-              <div class="field wide"><label>密钥</label><input id="chatAiApiKey" type="password" placeholder="${chatAssistant.has_api_key ? chatAssistant.api_key_masked : '请输入小窗AI密钥'}"></div>
-              <div class="field wide"><label>模型</label><input id="chatAiModel" value="${escapeHtml(chatAssistant.selected_model || '')}" placeholder="可检测后选择，也可手动填写"></div>
-            </div>
-            <div class="toolbar" style="margin-bottom:0">
-                ${canModifySensitive() ? '<button class="btn" onclick="saveChatAssistantConfig()">保存小窗模型</button><button class="btn primary" onclick="detectChatAssistantModels()">检测小窗模型</button>' : ''}
-              <span class="note">小窗聊天链路：用户输入 -> 小窗模型理解并规划 -> 后端按计划执行 -> 小窗模型总结回答；未启用时自动回落默认模型。</span>
-            </div>
-            <div style="height:12px"></div>
-            <div class="model-list">
-              ${chatModels.length ? chatModels.map(m => `<div class="model-row ${chatAssistant.selected_model === m.id ? 'active' : ''}">
-                <div><strong>${escapeHtml(m.id)}</strong><small>${chatAssistant.selected_model === m.id ? '当前小窗规划模型' : '可选小窗模型'}</small></div>
-                  ${canModifySensitive() ? `<button class="btn ${chatAssistant.selected_model === m.id ? 'primary' : ''}" onclick="selectChatAssistantModel(${jsArg(m.id)})">${chatAssistant.selected_model === m.id ? '已选择' : '选择'}</button>` : ''}
-              </div>`).join('') : '<div class="loading">尚未检测到小窗AI模型。也可以先手动填写模型名并保存。</div>'}
-            </div>
-          </div>
-        </div>
-        <div style="height:14px"></div>
-        <div class="card">
-          <div class="panel-title">独立风控交叉验证模型</div>
-          <div class="panel-body">
-            <div class="grid cols-4">
-              ${metric('启用状态', verifier.enabled ? '已启用' : '未启用', verifier.last_status || 'not_configured', verifier.enabled ? 'up' : 'muted')}
-              ${metric('风控模型', escapeHtml(verifier.selected_model || '--'), verifier.provider_name || '独立于主模型')}
-              ${metric('可用模型', safeText((verifier.available_models || []).length, 0), verifier.last_detected_at || '尚未检测')}
-              ${metric('密钥状态', verifier.has_api_key ? '已保存' : '未保存', verifier.api_key_masked || '本地私有配置')}
-            </div>
-            <div style="height:12px"></div>
-            <div class="toolbar">
-              <label class="note"><input id="riskAiEnabled" type="checkbox" ${verifier.enabled ? 'checked' : ''}> 启用独立风控模型</label>
-              <div class="field"><label>供应商</label><select id="riskAiProvider">${riskProviderOptions || '<option value="openai_compatible">兼容网关</option>'}</select></div>
-              <div class="field wide"><label>接口地址</label><input id="riskAiBaseUrl" placeholder="建议填另一家AI或另一个网关URL" value="${escapeHtml(verifier.base_url || '')}"></div>
-              <div class="field wide"><label>密钥</label><input id="riskAiApiKey" type="password" placeholder="${verifier.has_api_key ? verifier.api_key_masked : '请输入另一套密钥'}"></div>
-              <div class="field wide"><label>模型</label><input id="riskAiModel" value="${escapeHtml(verifier.selected_model || '')}" placeholder="可检测后选择，也可手动填写"></div>
-            </div>
-            <div class="toolbar" style="margin-bottom:0">
-                ${canModifySensitive() ? '<button class="btn" onclick="saveRiskVerifierConfig()">保存风控模型</button><button class="btn primary" onclick="detectRiskVerifierModels()">检测风控模型</button>' : ''}
-              <span class="note">这个模型只参与风控交叉验证；若它否决，风控报告会限制或禁止执行。</span>
-            </div>
-            <div style="height:12px"></div>
-            <div class="model-list">
-              ${riskModels.length ? riskModels.map(m => `<div class="model-row ${verifier.selected_model === m.id ? 'active' : ''}">
-                <div><strong>${escapeHtml(m.id)}</strong><small>${verifier.selected_model === m.id ? '当前风控复核模型' : '可选风控模型'}</small></div>
-                  ${canModifySensitive() ? `<button class="btn ${verifier.selected_model === m.id ? 'primary' : ''}" onclick="selectRiskVerifierModel(${jsArg(m.id)})">${verifier.selected_model === m.id ? '已选择' : '选择'}</button>` : ''}
-              </div>`).join('') : '<div class="loading">尚未检测到独立风控模型。也可以先手动填写模型名并保存。</div>'}
-            </div>
-          </div>
-        </div>
+        ${mainPanel}
+        ${chatPanel}
+        ${riskPanel}
         <div style="height:14px"></div>
         <div class="card">
           <div class="panel-title">AI 调用管理策略</div>
@@ -6696,5 +6721,6 @@
   </script>
 </body>
 </html>
+
 
 
