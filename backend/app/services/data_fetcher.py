@@ -135,6 +135,16 @@ def _normalize_price_by_reference(value, reference_price: float = 0.0) -> float:
     return price
 
 
+def _price_plausible_for_stock(code: str, price: float) -> bool:
+    price = _to_float(price)
+    if price <= 0:
+        return False
+    code = str(code or "")
+    if code.startswith(("4", "8", "920")):
+        return price < 300
+    return price < 3000
+
+
 def _write_validation_report(code: str, data_type: str, report: dict):
     payload = dict(report or {})
     payload["code"] = code
@@ -312,7 +322,22 @@ def _read_kline_cache(code: str, period: int = 101, days: Optional[int] = None) 
         if "date" in df.columns:
             df["date"] = df["date"].astype(str)
             df = df.sort_values("date").reset_index(drop=True)
+        price_columns = [col for col in ("open", "close", "high", "low") if col in df.columns]
+        if price_columns:
+            for col in price_columns:
+                df[col] = pd.to_numeric(df[col], errors="coerce")
+            invalid_mask = df[price_columns].apply(
+                lambda row: any(not _price_plausible_for_stock(code, value) for value in row if pd.notna(value)),
+                axis=1,
+            )
+            if invalid_mask.any():
+                df = df[~invalid_mask].reset_index(drop=True)
+                if df.empty:
+                    return None
         if "source" in df.columns and not df.empty and str(df["source"].iloc[0]) == "estimated":
+            return None
+        requested_days = int(days or 0) if days else 0
+        if period == 101 and (not requested_days or requested_days >= 20) and len(df) < 20:
             return None
         if days:
             df = df.tail(int(days)).reset_index(drop=True)
@@ -469,6 +494,8 @@ def read_realtime_cache(code: str) -> Optional[dict]:
         for field in ("price", "open", "high", "low", "pre_close", "limit_up", "limit_down", "avg_price"):
             if field in payload:
                 payload[field] = _normalize_price_by_reference(payload.get(field), reference_price)
+        if not _price_plausible_for_stock(code, payload.get("price") or payload.get("current_price")):
+            return None
         payload["source"] = "cache_file"
         payload["cache_path"] = path
         state_store.set_realtime(code, payload)
@@ -487,6 +514,11 @@ def supplement_daily_kline_from_realtime(code: str, realtime: dict) -> bool:
         low = _to_float(realtime.get("low"))
         pre_close = _to_float(realtime.get("pre_close"))
         if price <= 0 or open_price <= 0 or high <= 0 or low <= 0:
+            return False
+        if not all(_price_plausible_for_stock(code, value) for value in (price, open_price, high, low)):
+            return False
+        df = _read_kline_cache(code, 101, None)
+        if df is None or df.empty or len(df) < 20:
             return False
         trade_date = str(realtime.get("trade_date") or realtime.get("date") or datetime.now().strftime("%Y-%m-%d"))[:10]
         amplitude = _to_float(realtime.get("amplitude"))
@@ -517,15 +549,11 @@ def supplement_daily_kline_from_realtime(code: str, realtime: dict) -> bool:
             "validation_note": "daily row supplemented from realtime snapshot",
             "validation_checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
-        df = _read_kline_cache(code, 101, None)
-        if df is None or df.empty:
-            df = pd.DataFrame([row])
-        else:
-            df = df.copy()
-            df["date"] = df["date"].astype(str).str[:10]
-            df = df[df["date"] != trade_date]
-            df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
-            df = df.sort_values("date").reset_index(drop=True)
+        df = df.copy()
+        df["date"] = df["date"].astype(str).str[:10]
+        df = df[df["date"] != trade_date]
+        df = pd.concat([df, pd.DataFrame([row])], ignore_index=True)
+        df = df.sort_values("date").reset_index(drop=True)
         _write_kline_cache_accepting_single_source(code, 101, df, "realtime_daily_supplement")
         state_store.set_kline(code, 101, df)
         state_store.set_daily_bars(code, df)
@@ -558,7 +586,27 @@ def _write_intraday_cache(code: str, minutes: list):
         logger.warning(f"写入分时缓存失败 {code}: {e}")
 
 
-def intraday_minutes_valid(minutes: list) -> bool:
+def _minute_of_day(value) -> int:
+    text = str(value or "")
+    match = re.search(r"(\d{1,2}):(\d{2})", text)
+    if not match:
+        return -1
+    hour = _to_int(match.group(1), -1)
+    minute = _to_int(match.group(2), -1)
+    if hour < 0 or minute < 0:
+        return -1
+    return hour * 60 + minute
+
+
+def intraday_minutes_complete(minutes: list) -> bool:
+    rows = [row for row in (minutes or []) if _to_float(row.get("price")) > 0]
+    if len(rows) < 180:
+        return False
+    last_minute = max(_minute_of_day(row.get("time")) for row in rows)
+    return last_minute >= 14 * 60 + 50
+
+
+def intraday_minutes_valid(minutes: list, require_complete: Optional[bool] = None) -> bool:
     if not minutes:
         return False
     checked = 0
@@ -576,10 +624,14 @@ def intraday_minutes_valid(minutes: list) -> bool:
             if amount < implied_amount * 0.05:
                 return False
         checked += 1
+    if require_complete is None:
+        require_complete = not is_trading_hours()
+    if require_complete and not intraday_minutes_complete(minutes):
+        return False
     return checked > 0
 
 
-def read_intraday_cache(code: str) -> list:
+def read_intraday_cache(code: str, require_complete: Optional[bool] = None) -> list:
     path = _latest_file_for_code(INTRADAY_CACHE_DIR, code, ".csv")
     if not path:
         return []
@@ -592,7 +644,7 @@ def read_intraday_cache(code: str) -> list:
         df["source"] = "cache_file"
         df["cache_path"] = path
         minutes = df.to_dict("records")
-        if not intraday_minutes_valid(minutes):
+        if not intraday_minutes_valid(minutes, require_complete=require_complete):
             return []
         state_store.set_intraday(code, minutes)
         return minutes
@@ -768,6 +820,9 @@ def fetch_realtime_tencent_batch(codes: list) -> dict:
                 code = m.group(1)
                 parts = m.group(2).split("~")
                 if len(parts) < 50 or _to_float(parts[3]) <= 0:
+                    continue
+                if not _price_plausible_for_stock(code, _to_float(parts[3])):
+                    logger.warning(f"腾讯实时行情价格异常，已忽略 {code}: price={parts[3]}")
                     continue
                 item = {
                     "code": code,
@@ -2307,49 +2362,80 @@ def _safe_float(value, default=0.0):
 
 # ==================== 分时数据 ====================
 
+def _parse_intraday_trends(trends: list, pre_close: float = 0) -> list:
+    minutes = []
+    for trend in trends or []:
+        parts = str(trend).split(",")
+        if len(parts) >= 8:
+            price = _to_float(parts[1])
+            if price <= 0:
+                continue
+            minutes.append({
+                "time": parts[0],
+                "price": price,
+                "avg_price": _to_float(parts[7]),
+                "volume": _to_int(parts[5]),
+                "amount": _to_float(parts[6]),
+                "pct_change": round((price - pre_close) / pre_close * 100, 2) if pre_close else 0,
+                "source": "eastmoney_trends",
+            })
+    return minutes
+
+
+def _select_latest_complete_intraday(minutes: list) -> list:
+    by_date = {}
+    for row in minutes or []:
+        time_text = str(row.get("time") or "")
+        date_key = time_text[:10] if re.match(r"\d{4}-\d{2}-\d{2}", time_text) else ""
+        by_date.setdefault(date_key, []).append(row)
+    for date_key in sorted(by_date.keys(), reverse=True):
+        rows = by_date[date_key]
+        if intraday_minutes_complete(rows):
+            return rows
+    return []
+
+
 def fetch_intraday_minutes(code: str, allow_fallback: bool = False) -> list:
     """获取当日分时数据（分钟级）"""
     _rate_limit("push2.eastmoney.com")
     secid = _get_secid(code)
     url = f"https://push2.eastmoney.com/api/qt/stock/trends2/get"
-    params = {
-        "secid": secid,
-        "fields1": "f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13",
-        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58",
-        "iscr": 0,
-        "ndays": 1,
-    }
     try:
-        resp = requests.get(url, params=params, headers=HEADERS, timeout=4)
-        data = resp.json()
-        trends = data.get("data", {}).get("trends", [])
-        pre_close = data.get("data", {}).get("preClose", 0)
+        require_complete = not is_trading_hours()
         minutes = []
-        for trend in trends:
-            parts = trend.split(",")
-            if len(parts) >= 8:
-                price = float(parts[1])
-                volume = int(float(parts[5]))
-                amount = float(parts[6])
-                avg_price = float(parts[7])
-                minutes.append({
-                    "time": parts[0],
-                    "price": price,
-                    "avg_price": avg_price,
-                    "volume": volume,
-                    "amount": amount,
-                    "pct_change": round((price - pre_close) / pre_close * 100, 2) if pre_close else 0,
-                    "source": "eastmoney_trends",
-                })
+        for ndays in ([1, 5] if require_complete else [1]):
+            params = {
+                "secid": secid,
+                "fields1": "f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13",
+                "fields2": "f51,f52,f53,f54,f55,f56,f57,f58",
+                "iscr": 0,
+                "ndays": ndays,
+            }
+            resp = requests.get(
+                url,
+                params=params,
+                headers={**HEADERS, "Referer": "https://quote.eastmoney.com/"},
+                timeout=10,
+            )
+            data = resp.json()
+            raw_minutes = _parse_intraday_trends(
+                data.get("data", {}).get("trends", []),
+                data.get("data", {}).get("preClose", 0),
+            )
+            minutes = _select_latest_complete_intraday(raw_minutes) if require_complete else raw_minutes
+            if minutes and intraday_minutes_valid(minutes, require_complete=require_complete):
+                break
         if not minutes:
-            return read_intraday_cache(code)
+            return read_intraday_cache(code, require_complete=require_complete)
+        if not intraday_minutes_valid(minutes, require_complete=require_complete):
+            return read_intraday_cache(code, require_complete=require_complete) if allow_fallback else []
         if minutes:
             state_store.set_intraday(code, minutes)
             _write_intraday_cache(code, minutes)
         return minutes
     except Exception as e:
         logger.warning(f"获取分时数据失败 {code}: {e}")
-        return read_intraday_cache(code)
+        return read_intraday_cache(code, require_complete=not is_trading_hours()) if allow_fallback else []
 
 
 # ==================== 多周期K线 ====================
@@ -2373,12 +2459,13 @@ def fetch_kline(code: str, period: int = 101, days: int = 120, allow_fallback: b
             _write_validation_report(code, "kline_101", report)
             if candidate_df is not None and not candidate_df.empty:
                 _write_kline_candidate_cache(code, 101, candidate_df, report)
-            if trusted_df is not None and not trusted_df.empty:
+            min_history_rows = min(int(days or 0), 20)
+            if trusted_df is not None and not trusted_df.empty and len(trusted_df) >= min_history_rows:
                 state_store.set_kline(code, 101, trusted_df)
                 state_store.set_daily_bars(code, trusted_df)
                 _write_kline_cache(code, 101, trusted_df)
                 return trusted_df
-            if candidate_df is not None and not candidate_df.empty:
+            if candidate_df is not None and not candidate_df.empty and len(candidate_df) >= min_history_rows:
                 _write_kline_cache_accepting_single_source(code, 101, candidate_df, "fallback_public_source_after_validation")
                 state_store.set_kline(code, 101, candidate_df)
                 state_store.set_daily_bars(code, candidate_df)

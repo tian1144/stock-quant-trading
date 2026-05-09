@@ -36,7 +36,7 @@ from app.services import (
     technical_analysis, ai_model_service, ai_stock_picker, market_data_hub,
     disclosure_service, strategy_memory_service, trade_review_service,
     ai_trustee_service, trading_calendar_service, auth_service, broker_service,
-    sms_code_service, email_code_service, tencent_captcha_service,
+    sms_code_service, email_code_service, tencent_captcha_service, simple_cache,
     site_task_assistant
 )
 from app.backtest.engine import BacktestEngine, create_context_ma_crossover_strategy
@@ -583,6 +583,13 @@ def _run_screening_job(job_id: str, params: dict):
             "logic": stock_screener.get_screening_logic_summary(),
             "elapsed_seconds": round(time.time() - started, 1),
         }
+        simple_cache.invalidate_prefix("screening_")
+        simple_cache.set(simple_cache.make_key("screening_results", "latest"), {
+            "count": len(results),
+            "results": result["results"],
+            "logic": result["logic"],
+            "updated_at": state_store.get_system_state().get("last_screening_time"),
+        }, simple_cache.TTL_SCREENING_SECONDS)
         _update_screening_job(
             job_id,
             status="done",
@@ -1544,60 +1551,78 @@ async def run_post_close_validation_now():
 async def get_snapshot(stock_code: str):
     """获取单只股票实时行情（同花顺数据源）"""
     _track_realtime_code(stock_code)
-    cached = data_fetcher.read_realtime_cache(stock_code)
-    if cached:
-        threading.Thread(
-            target=lambda: data_fetcher.fetch_verified_realtime_batch([stock_code]),
-            daemon=True,
-        ).start()
-        return {
-            "code": stock_code,
-            "name": cached.get("name", ""),
-            "current_price": cached.get("price") or cached.get("current_price", 0),
-            "open": cached.get("open", 0),
-            "high": cached.get("high", 0),
-            "low": cached.get("low", 0),
-            "pre_close": cached.get("pre_close", 0),
-            "pct_change": cached.get("pct_change", 0),
-            "volume": cached.get("volume", 0),
-            "amount": cached.get("amount", 0),
-            "source": cached.get("source", "cache_file"),
-            "validation_status": cached.get("validation_status", "cache"),
-            "validated_sources": cached.get("validated_sources", []),
-            "updated_at": cached.get("cached_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "cache_hit": True,
-            "background_refresh": True,
-        }
-    verified = data_fetcher.fetch_verified_realtime_batch([stock_code]).get(stock_code)
-    if verified:
-        return {
-            "code": stock_code,
-            "name": verified.get("name", ""),
-            "current_price": verified.get("price", 0),
-            "open": verified.get("open", 0),
-            "high": verified.get("high", 0),
-            "low": verified.get("low", 0),
-            "pre_close": verified.get("pre_close", 0),
-            "pct_change": verified.get("pct_change", 0),
-            "volume": verified.get("volume", 0),
-            "amount": verified.get("amount", 0),
-            "source": verified.get("source", "verified_realtime"),
-            "validation_status": verified.get("validation_status"),
-            "validated_sources": verified.get("validated_sources", []),
-            "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        }
-    quote = _fetch_ths_quote(stock_code)
-    if quote:
-        return {
-            "code": stock_code,
-            "name": quote["name"],
-            "current_price": quote["price"],
-            "open": quote["open"],
-            "volume": quote["volume"],
-            "amount": quote["amount"],
-            "source": "同花顺",
-        }
-    return {"error": "获取行情数据失败", "message": "数据缺失"}
+    cache_key = simple_cache.make_key("market_snapshot", stock_code)
+    memory_cached = simple_cache.get(cache_key)
+    if memory_cached is not None:
+        return simple_cache.mark(memory_cached, True)
+    try:
+        cached = data_fetcher.read_realtime_cache(stock_code)
+        if cached:
+            threading.Thread(
+                target=lambda: data_fetcher.fetch_verified_realtime_batch([stock_code]),
+                daemon=True,
+            ).start()
+            payload = {
+                "code": stock_code,
+                "name": cached.get("name", ""),
+                "current_price": cached.get("price") or cached.get("current_price", 0),
+                "open": cached.get("open", 0),
+                "high": cached.get("high", 0),
+                "low": cached.get("low", 0),
+                "pre_close": cached.get("pre_close", 0),
+                "pct_change": cached.get("pct_change", 0),
+                "volume": cached.get("volume", 0),
+                "amount": cached.get("amount", 0),
+                "source": cached.get("source", "cache_file"),
+                "validation_status": cached.get("validation_status", "cache"),
+                "validated_sources": cached.get("validated_sources", []),
+                "updated_at": cached.get("cached_at") or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "cache_hit": True,
+                "background_refresh": True,
+            }
+            simple_cache.set(cache_key, payload, simple_cache.TTL_REALTIME_SECONDS)
+            return simple_cache.mark(payload, False)
+        verified = data_fetcher.fetch_verified_realtime_batch([stock_code]).get(stock_code)
+        if verified:
+            payload = {
+                "code": stock_code,
+                "name": verified.get("name", ""),
+                "current_price": verified.get("price", 0),
+                "open": verified.get("open", 0),
+                "high": verified.get("high", 0),
+                "low": verified.get("low", 0),
+                "pre_close": verified.get("pre_close", 0),
+                "pct_change": verified.get("pct_change", 0),
+                "volume": verified.get("volume", 0),
+                "amount": verified.get("amount", 0),
+                "source": verified.get("source", "verified_realtime"),
+                "validation_status": verified.get("validation_status"),
+                "validated_sources": verified.get("validated_sources", []),
+                "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            }
+            simple_cache.set(cache_key, payload, simple_cache.TTL_REALTIME_SECONDS)
+            return simple_cache.mark(payload, False)
+        quote = _fetch_ths_quote(stock_code)
+        if quote:
+            payload = {
+                "code": stock_code,
+                "name": quote["name"],
+                "current_price": quote["price"],
+                "open": quote["open"],
+                "volume": quote["volume"],
+                "amount": quote["amount"],
+                "source": "同花顺",
+            }
+            simple_cache.set(cache_key, payload, simple_cache.TTL_REALTIME_SECONDS)
+            return simple_cache.mark(payload, False)
+    except Exception as exc:
+        logger.warning("market snapshot fetch failed for %s: %s", stock_code, exc)
+        stale = simple_cache.get_stale(cache_key)
+        if stale is not None:
+            payload = simple_cache.mark(stale, True, stale=True)
+            payload.setdefault("message", "行情源暂不可用，已返回最近一次缓存。")
+            return payload
+    return {"error": "获取行情数据失败", "message": "数据缺失", "cache": False}
 
 @app.get("/api/v1/market/snapshots")
 async def get_snapshots(
@@ -1605,62 +1630,76 @@ async def get_snapshots(
 ):
     """批量获取股票实时行情（同花顺数据源）"""
     stock_codes = [code.strip() for code in codes.split(",") if code.strip()][:20]
+    cache_key = simple_cache.make_key("market_snapshots", codes=",".join(stock_codes))
+    memory_cached = simple_cache.get(cache_key)
+    if memory_cached is not None:
+        return simple_cache.mark(memory_cached, True)
     for code in stock_codes:
         _track_realtime_code(code)
-    snapshots = []
-    missing_codes = []
-    for code in stock_codes:
-        cached = data_fetcher.read_realtime_cache(code)
-        if cached:
-            snapshots.append({
-                "code": code,
-                "name": cached.get("name", ""),
-                "current_price": cached.get("price") or cached.get("current_price", 0),
-                "open": cached.get("open", 0),
-                "volume": cached.get("volume", 0),
-                "amount": cached.get("amount", 0),
-                "source": cached.get("source", "cache_file"),
-                "validation_status": cached.get("validation_status", "cache"),
-                "validated_sources": cached.get("validated_sources", []),
-                "cache_hit": True,
-            })
-        else:
-            missing_codes.append(code)
-    if snapshots:
-        refresh_codes = list(stock_codes)
-        threading.Thread(
-            target=lambda: data_fetcher.fetch_verified_realtime_batch(refresh_codes),
-            daemon=True,
-        ).start()
-    verified_batch = data_fetcher.fetch_verified_realtime_batch(missing_codes) if missing_codes else {}
+    try:
+        snapshots = []
+        missing_codes = []
+        for code in stock_codes:
+            cached = data_fetcher.read_realtime_cache(code)
+            if cached:
+                snapshots.append({
+                    "code": code,
+                    "name": cached.get("name", ""),
+                    "current_price": cached.get("price") or cached.get("current_price", 0),
+                    "open": cached.get("open", 0),
+                    "volume": cached.get("volume", 0),
+                    "amount": cached.get("amount", 0),
+                    "source": cached.get("source", "cache_file"),
+                    "validation_status": cached.get("validation_status", "cache"),
+                    "validated_sources": cached.get("validated_sources", []),
+                    "cache_hit": True,
+                })
+            else:
+                missing_codes.append(code)
+        if snapshots:
+            refresh_codes = list(stock_codes)
+            threading.Thread(
+                target=lambda: data_fetcher.fetch_verified_realtime_batch(refresh_codes),
+                daemon=True,
+            ).start()
+        verified_batch = data_fetcher.fetch_verified_realtime_batch(missing_codes) if missing_codes else {}
 
-    for code in missing_codes:
-        verified = verified_batch.get(code)
-        if verified:
-            snapshots.append({
-                "code": code,
-                "name": verified.get("name", ""),
-                "current_price": verified.get("price", 0),
-                "open": verified.get("open", 0),
-                "volume": verified.get("volume", 0),
-                "amount": verified.get("amount", 0),
-                "source": verified.get("source", "verified_realtime"),
-                "validation_status": verified.get("validation_status"),
-                "validated_sources": verified.get("validated_sources", []),
-            })
-            continue
-        quote = _fetch_ths_quote(code)
-        if quote:
-            snapshots.append({
-                "code": code,
-                "name": quote["name"],
-                "price": quote["price"],
-                "open": quote["open"],
-                "volume": quote["volume"],
-                "amount": quote["amount"],
-            })
-
-    return {"snapshots": snapshots}
+        for code in missing_codes:
+            verified = verified_batch.get(code)
+            if verified:
+                snapshots.append({
+                    "code": code,
+                    "name": verified.get("name", ""),
+                    "current_price": verified.get("price", 0),
+                    "open": verified.get("open", 0),
+                    "volume": verified.get("volume", 0),
+                    "amount": verified.get("amount", 0),
+                    "source": verified.get("source", "verified_realtime"),
+                    "validation_status": verified.get("validation_status"),
+                    "validated_sources": verified.get("validated_sources", []),
+                })
+                continue
+            quote = _fetch_ths_quote(code)
+            if quote:
+                snapshots.append({
+                    "code": code,
+                    "name": quote["name"],
+                    "price": quote["price"],
+                    "open": quote["open"],
+                    "volume": quote["volume"],
+                    "amount": quote["amount"],
+                })
+        payload = {"snapshots": snapshots}
+        simple_cache.set(cache_key, payload, simple_cache.TTL_REALTIME_SECONDS)
+        return simple_cache.mark(payload, False)
+    except Exception as exc:
+        logger.warning("market snapshots fetch failed for %s: %s", stock_codes, exc)
+        stale = simple_cache.get_stale(cache_key)
+        if stale is not None:
+            payload = simple_cache.mark(stale, True, stale=True)
+            payload.setdefault("message", "行情源暂不可用，已返回最近一次批量缓存。")
+            return payload
+        return {"snapshots": [], "message": "行情数据暂不可用", "cache": False}
 
 
 # ==================== 量化交易系统 API ====================
@@ -1668,13 +1707,19 @@ async def get_snapshots(
 @app.get("/api/v1/quant/screening/results")
 async def get_screening_results():
     """获取选股结果 Top50"""
+    cache_key = simple_cache.make_key("screening_results", "latest")
+    memory_cached = simple_cache.get(cache_key)
+    if memory_cached is not None:
+        return simple_cache.mark(memory_cached, True)
     results = state_store.get_screening_results()
-    return {
+    payload = {
         "count": len(results),
         "results": results,
         "logic": stock_screener.get_screening_logic_summary(),
         "updated_at": state_store.get_system_state().get("last_screening_time"),
     }
+    simple_cache.set(cache_key, payload, simple_cache.TTL_SCREENING_SECONDS)
+    return simple_cache.mark(payload, False)
 
 
 @app.post("/api/v1/quant/screening/run")
@@ -1684,6 +1729,15 @@ async def run_screening(payload: dict | None = Body(default=None)):
     strategy = payload.get("strategy")
     if strategy in ("short", "long", "event_driven"):
         state_store.update_user_settings({"trading_style": strategy})
+    settings_sig = json.dumps(state_store.get_user_settings(), sort_keys=True, ensure_ascii=False, default=str)
+    cache_key = simple_cache.make_key(
+        "screening_run",
+        strategy or state_store.get_user_settings().get("trading_style", "short"),
+        settings=settings_sig,
+    )
+    memory_cached = simple_cache.get(cache_key)
+    if memory_cached is not None:
+        return simple_cache.mark(memory_cached, True)
     if not state_store.get_stock_universe():
         stocks = _stock_cache["stocks"] or data_fetcher.read_stock_universe_cache() or []
         if stocks:
@@ -1691,20 +1745,29 @@ async def run_screening(payload: dict | None = Body(default=None)):
             _stock_cache["updated_at"] = time.time()
             _ensure_stock_universe(stocks)
         else:
-            return {
+            payload = {
                 "message": "数据缺失",
                 "count": 0,
                 "results": [],
                 "logic": stock_screener.get_screening_logic_summary(),
             }
+            return simple_cache.mark(payload, False)
     results = await asyncio.to_thread(trading_engine.manual_screening)
     agent_workspace.record_event("score", "screening", f"选股完成：{len(results)} 个候选。")
-    return {
+    payload = {
         "message": "选股完成",
         "count": len(results),
         "results": results,
         "logic": stock_screener.get_screening_logic_summary(),
     }
+    simple_cache.set(cache_key, payload, simple_cache.TTL_SCREENING_SECONDS)
+    simple_cache.set(simple_cache.make_key("screening_results", "latest"), {
+        "count": len(results),
+        "results": results,
+        "logic": payload["logic"],
+        "updated_at": state_store.get_system_state().get("last_screening_time"),
+    }, simple_cache.TTL_SCREENING_SECONDS)
+    return simple_cache.mark(payload, False)
 
 
 @app.post("/api/v1/quant/screening/run/start")
@@ -1712,6 +1775,7 @@ async def start_screening_job(payload: dict | None = Body(default=None)):
     """启动后台智能选股任务，避免浏览器等待长请求超时。"""
     payload = payload or {}
     strategy = payload.get("strategy")
+    simple_cache.invalidate_prefix("screening_")
     running = _recent_running_screening_job()
     if running:
         return {
@@ -1778,6 +1842,14 @@ async def get_screening_job_status(job_id: str):
         job.update(file_job)
         with _screening_jobs_lock:
             _screening_jobs[job_id] = job.copy()
+        if job.get("status") == "done" and isinstance(job.get("result"), dict):
+            result = job.get("result") or {}
+            simple_cache.set(simple_cache.make_key("screening_results", "latest"), {
+                "count": result.get("count", 0),
+                "results": result.get("results", []),
+                "logic": result.get("logic", stock_screener.get_screening_logic_summary()),
+                "updated_at": job.get("finished_at") or job.get("updated_at"),
+            }, simple_cache.TTL_SCREENING_SECONDS)
     if not job:
         return {"status": "missing", "job_id": job_id, "message": "未找到该选股任务"}
     return job
@@ -2028,6 +2100,10 @@ async def run_single_stock_ai_analysis(code: str, payload: dict | None = Body(de
     """对单只股票执行AI分析，并加入AI推荐/分析列表。"""
     payload = payload or {}
     strategy = payload.get("strategy") or state_store.get_user_settings().get("trading_style", "short")
+    cache_key = simple_cache.make_key("single_stock_ai_analysis", code, strategy=strategy)
+    memory_cached = simple_cache.get(cache_key)
+    if memory_cached is not None:
+        return simple_cache.mark(memory_cached, True)
     try:
         result = ai_stock_picker.analyze_single_stock(code, strategy=strategy)
         analysis = result.get("analysis", {})
@@ -2043,7 +2119,8 @@ async def run_single_stock_ai_analysis(code: str, payload: dict | None = Body(de
                 "ai_rank_score": analysis.get("ai_rank_score"),
             },
         )
-        return result
+        simple_cache.set(cache_key, result, simple_cache.TTL_AI_ANALYSIS_SECONDS)
+        return simple_cache.mark(result, False)
     except Exception as e:
         logger.exception(f"{code} 单股AI分析失败")
         agent_workspace.record_event(
@@ -2053,6 +2130,11 @@ async def run_single_stock_ai_analysis(code: str, payload: dict | None = Body(de
             level="error",
             payload={"code": code, "strategy": strategy, "error": str(e)},
         )
+        stale = simple_cache.get_stale(cache_key)
+        if stale is not None:
+            payload = simple_cache.mark(stale, True, stale=True)
+            payload.setdefault("message", "AI分析暂不可用，已返回最近一次缓存结果。")
+            return payload
         return {"error": str(e), "code": code, "strategy": strategy, "analysis": {}, "ai_meta": {"ok": False, "used_ai": False}}
 
 
@@ -2590,17 +2672,42 @@ def _json_safe(value):
 async def get_stock_minutes(code: str):
     """获取分时图数据"""
     _track_realtime_code(code)
-    minutes = state_store.get_intraday(code) or data_fetcher.read_intraday_cache(code)
-    if not minutes or not data_fetcher.intraday_minutes_valid(minutes):
-        minutes = data_fetcher.fetch_intraday_minutes(code, allow_fallback=False)
-    source = minutes[0].get("source") if minutes else None
-    return {
-        "code": code,
-        "minutes": minutes,
-        "source": source or "unavailable",
-        "status": "ok" if minutes else "unavailable",
-        "message": "" if minutes else "分时数据缺失，已停止使用估算曲线。",
-    }
+    require_complete = not data_fetcher.is_trading_hours()
+    cache_key = simple_cache.make_key("stock_minutes", code, require_complete=require_complete)
+    memory_cached = simple_cache.get(cache_key)
+    if memory_cached is not None:
+        return simple_cache.mark(memory_cached, True)
+    try:
+        minutes = state_store.get_intraday(code)
+        if not data_fetcher.intraday_minutes_valid(minutes, require_complete=require_complete):
+            minutes = data_fetcher.read_intraday_cache(code, require_complete=require_complete)
+        if not minutes or not data_fetcher.intraday_minutes_valid(minutes, require_complete=require_complete):
+            minutes = data_fetcher.fetch_intraday_minutes(code, allow_fallback=False)
+        source = minutes[0].get("source") if minutes else None
+        payload = {
+            "code": code,
+            "minutes": minutes,
+            "source": source or "unavailable",
+            "status": "ok" if minutes else "unavailable",
+            "message": "" if minutes else "分时数据缺失，已停止使用估算曲线。",
+        }
+        simple_cache.set(cache_key, payload, simple_cache.TTL_INTRADAY_SECONDS)
+        return simple_cache.mark(payload, False)
+    except Exception as exc:
+        logger.warning("intraday minutes fetch failed for %s: %s", code, exc)
+        stale = simple_cache.get_stale(cache_key)
+        if stale is not None:
+            payload = simple_cache.mark(stale, True, stale=True)
+            payload.setdefault("message", "分时数据源暂不可用，已返回最近一次缓存。")
+            return payload
+        return {
+            "code": code,
+            "minutes": [],
+            "source": "unavailable",
+            "status": "unavailable",
+            "message": "分时数据暂不可用。",
+            "cache": False,
+        }
 
 
 @app.get("/api/v1/stocks/{code}/kline")
@@ -2609,6 +2716,10 @@ async def get_stock_kline(code: str, period: int = Query(101), days: int = Query
     period: 1=1分, 5=5分, 15=15分, 30=30分, 60=60分, 101=日K, 102=周K
     """
     _track_realtime_code(code)
+    cache_key = simple_cache.make_key("stock_kline", code, period=int(period), days=int(days or 0))
+    memory_cached = simple_cache.get(cache_key)
+    if memory_cached is not None:
+        return simple_cache.mark(memory_cached, True)
     df = data_fetcher._read_kline_cache(code, period, days)
     if int(period) == 101:
         realtime = data_fetcher.read_realtime_cache(code) or state_store.get_realtime(code) or {}
@@ -2625,7 +2736,7 @@ async def get_stock_kline(code: str, period: int = Query(101), days: int = Query
     if df is None:
         df = state_store.get_kline(code, period)
     if df is None:
-        return {
+        payload = {
             "code": code,
             "period": period,
             "klines": [],
@@ -2633,6 +2744,7 @@ async def get_stock_kline(code: str, period: int = Query(101), days: int = Query
             "status": "unavailable",
             "message": "K线数据缺失。",
         }
+        return simple_cache.mark(payload, False)
     if period == 101 and state_store.get_daily_bars(code) is None:
         state_store.set_daily_bars(code, df)
     klines = _json_safe(df.to_dict("records"))
@@ -2653,7 +2765,7 @@ async def get_stock_kline(code: str, period: int = Query(101), days: int = Query
         candidate_rows = int(validation_report.get("candidate_rows") or 0)
         if trusted_rows < days and candidate_rows:
             message = "当前只返回已通过至少双源一致校验的日K；未通过校验的样本已进入候选缓存和校验报告。"
-    return {
+    payload = {
         "code": code,
         "period": period,
         "klines": klines,
@@ -2663,6 +2775,8 @@ async def get_stock_kline(code: str, period: int = Query(101), days: int = Query
         "validation_report": validation_report,
         "message": message,
     }
+    simple_cache.set(cache_key, payload, simple_cache.TTL_KLINE_SECONDS)
+    return simple_cache.mark(payload, False)
 
 
 @app.get("/api/v1/stocks/{code}/chips")
