@@ -1717,6 +1717,7 @@
       screeningJob: null,
       loadedSections: {},
       loadingSections: {},
+      loadingTasks: {},
       backgroundTimers: [],
       refreshRunning: false,
       refreshQueued: false,
@@ -1924,37 +1925,113 @@
       })[key] || '当前因子解释待补充。';
     }
 
+    function apiErrorMessage(err) {
+      const raw = (err && (err.message || err.error || err.detail)) || '';
+      const code = (err && err.code) || '';
+      const status = (err && err.status) || 0;
+      if (code === 'AI_API_KEY_MISSING' || /api key|密钥|key缺失/i.test(raw)) return 'AI API Key 缺失或不正确，请到“智能模型”里重新保存密钥。';
+      if (code === 'AI_BASE_URL_ERROR' || /base url|接口地址|url/i.test(raw)) return 'AI 接口地址配置错误，请检查 Base URL 是否填写正确。';
+      if (status === 401 || code === 'UNAUTHORIZED') return '认证失败，请重新登录；如果是 AI 接口，请检查 API Key。';
+      if (status === 403 || code === 'FORBIDDEN') return '没有权限执行该操作，或当前账号/API Key 无权访问该模型。';
+      if (status === 429 || code === 'RATE_LIMITED') return '请求过于频繁或模型额度受限，请稍后再试。';
+      if (status >= 500 || code === 'INTERNAL_ERROR') return raw || '服务器内部异常，请稍后重试。';
+      if (code === 'MISSING_STOCK_CODE') return '缺少股票代码，请输入股票代码后再试。';
+      if (code === 'STOCK_NOT_FOUND') return '股票代码不存在，请检查后重新输入。';
+      if (code === 'MARKET_API_ERROR') return '行情接口请求失败，请稍后重试。';
+      if (code === 'KLINE_API_ERROR') return 'K线接口请求失败，请稍后重试。';
+      if (code === 'REQUEST_TIMEOUT' || /timeout|超时|aborted|abort|signal/i.test(raw)) return '请求超时或被浏览器中断，请稍后重试。';
+      if (/Failed to fetch/i.test(raw)) return '后端连接失败，请确认服务仍在运行，或检查网络后重试。';
+      return raw || '请求失败，请稍后重试。';
+    }
+
+    function makeApiError(message, { code = 'REQUEST_FAILED', status = 0, payload = null } = {}) {
+      const err = new Error(message || '请求失败，请稍后重试。');
+      err.code = code;
+      err.status = status;
+      err.payload = payload;
+      return err;
+    }
+
+    function showApiError(err, options = {}) {
+      if (options.silentError) return;
+      const message = apiErrorMessage(err);
+      toast(message);
+    }
+
     async function api(url, options = {}) {
       const timeout = options.timeout || 12000;
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeout);
-      const { timeout: _timeout, noCache, ...fetchOptions } = options;
+      const { timeout: _timeout, noCache, silentError, ...fetchOptions } = options;
       const requestUrl = noCache
         ? `${url}${url.includes('?') ? '&' : '?'}_=${Date.now()}`
         : url;
       try {
-          const res = await fetch(API_BASE + requestUrl, {
-            headers: { 'Content-Type': 'application/json', ...(AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {}), ...(noCache ? { 'Cache-Control': 'no-cache' } : {}) },
-            cache: noCache ? 'no-store' : 'default',
-            signal: controller.signal,
-            ...fetchOptions
+        const res = await fetch(API_BASE + requestUrl, {
+          headers: { 'Content-Type': 'application/json', ...(AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {}), ...(noCache ? { 'Cache-Control': 'no-cache' } : {}) },
+          cache: noCache ? 'no-store' : 'default',
+          signal: controller.signal,
+          ...fetchOptions
+        });
+        const text = await res.text();
+        let data = null;
+        try {
+          data = text ? JSON.parse(text) : {};
+        } catch (parseErr) {
+          throw makeApiError('接口返回的不是有效 JSON，请稍后重试。', { code: 'INVALID_JSON_RESPONSE', status: res.status });
+        }
+        if (!res.ok || data.success === false) {
+          if (res.status === 401) showLoginGate();
+          throw makeApiError(data.message || data.error || data.detail || `${res.status} ${url}`, {
+            code: data.code || `HTTP_${res.status || 0}`,
+            status: res.status,
+            payload: data,
           });
-          const data = await res.json().catch(() => ({}));
-          if (!res.ok) {
-            if (res.status === 401) showLoginGate();
-            throw new Error(data.error || data.message || `${res.status} ${url}`);
-          }
-          return data;
+        }
+        if (data && data.success === true && Array.isArray(data.data) && Object.keys(data).every(k => ['success', 'data', 'message', 'code'].includes(k))) {
+          return data.data;
+        }
+        if (data && data.success === true && data.data && typeof data.data === 'object' && !Array.isArray(data.data)) {
+          return { ...data, ...data.data };
+        }
+        return data;
       } catch (err) {
+        let normalized = err;
         if (err && (err.name === 'AbortError' || /aborted|abort|signal/i.test(err.message || ''))) {
-          throw new Error(`请求超时或被浏览器中断，请稍后重试；如果是全市场AI选股，建议先用关注股票选股验证模型连通性。`);
+          normalized = makeApiError('请求超时或被浏览器中断，请稍后重试；如果是全市场AI选股，建议先用关注股票选股验证模型连通性。', { code: 'REQUEST_TIMEOUT' });
+        } else if (err && /Failed to fetch/i.test(err.message || '')) {
+          normalized = makeApiError('后端连接失败，请确认H5预览服务仍在运行，或刷新页面后重试。', { code: 'NETWORK_ERROR' });
         }
-        if (err && /Failed to fetch/i.test(err.message || '')) {
-          throw new Error('后端连接失败，请确认H5预览服务仍在运行，或刷新页面后重试。');
-        }
-        throw err;
+        showApiError(normalized, { silentError });
+        throw normalized;
       } finally {
         clearTimeout(timer);
+      }
+    }
+    function isTaskLoading(key) {
+      return !!(state.loadingTasks || {})[key];
+    }
+    function setTaskLoading(key, loading, message = '') {
+      state.loadingTasks = state.loadingTasks || {};
+      if (loading) {
+        state.loadingTasks[key] = { message, started_at: Date.now() };
+      } else {
+        delete state.loadingTasks[key];
+      }
+      if (state.active === 'signals') renderSignals();
+      if (state.active === 'screening') renderScreening();
+      if (state.active === 'lab') renderLab();
+    }
+    async function runOnceTask(key, message, fn) {
+      if (isTaskLoading(key)) {
+        toast(message || '任务正在执行中，请等待完成');
+        return null;
+      }
+      setTaskLoading(key, true, message);
+      try {
+        return await fn();
+      } finally {
+        setTaskLoading(key, false);
       }
     }
     function showResultModal(title, lines = [], isError = false) {
@@ -2057,22 +2134,21 @@
     }
     async function loadCaptchaConfig() {
       if (state.captcha.config) return state.captcha.config;
-      const cfg = await fetch(API_BASE + '/api/v1/auth/email/config').then(r => r.json()).catch(() => ({ ok: false, enabled: false }));
+      const cfg = await api('/api/v1/auth/email/config', { silentError: true }).catch(() => ({ ok: false, enabled: false }));
       state.email.config = cfg;
       return cfg;
     }
     async function sendEmailCode(email, purpose, phone = '') {
-      const res = await fetch(API_BASE + '/api/v1/auth/email/send', {
+      const res = await api('/api/v1/auth/email/send', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {}) },
         body: JSON.stringify({ email, purpose, phone })
-      }).then(r => r.json()).catch(e => ({ ok: false, error: e.message }));
+      }).catch(e => ({ ok: false, error: apiErrorMessage(e) }));
       toast(res.ok ? `${res.message}${res.email_masked ? `（${res.email_masked}）` : ''}` : (res.error || '验证码发送失败'));
       return res;
     }
     async function loadCaptchaConfig() {
       if (state.captcha.config) return state.captcha.config;
-      const cfg = await fetch(API_BASE + '/api/v1/auth/captcha/config').then(r => r.json()).catch(() => ({ ok: false, enabled: false, app_id: '' }));
+      const cfg = await api('/api/v1/auth/captcha/config', { silentError: true }).catch(() => ({ ok: false, enabled: false, app_id: '' }));
       state.captcha.config = cfg;
       return cfg;
     }
@@ -2116,11 +2192,10 @@
         toast(captcha.error);
         return { ok: false, error: captcha.error };
       }
-      const res = await fetch(API_BASE + '/api/v1/auth/sms/send', {
+      const res = await api('/api/v1/auth/sms/send', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...(AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {}) },
         body: JSON.stringify({ phone, purpose, ...captcha })
-      }).then(r => r.json()).catch(e => ({ ok: false, error: e.message }));
+      }).catch(e => ({ ok: false, error: apiErrorMessage(e) }));
       toast(res.ok ? `${res.message}${res.dev_hint ? ' 开发模式请看 sms_dev.log。' : ''}` : (res.error || '验证码发送失败'));
       return res;
     }
@@ -2753,6 +2828,29 @@
     function saveWatchlist() {
       localStorage.setItem('quant_watchlist', JSON.stringify(state.watchlist));
     }
+    async function syncWatchlistFromServer() {
+      const res = await api('/api/v1/watchlist', { timeout: 7000, noCache: true, silentError: true }).catch(() => null);
+      if (res && Array.isArray(res.watchlist)) {
+        state.watchlist = res.watchlist;
+        saveWatchlist();
+        if (state.active === 'watchlist') renderWatchlist();
+      }
+    }
+    function syncWatchlistItemToServer(stock) {
+      api('/api/v1/watchlist', {
+        method: 'POST',
+        timeout: 7000,
+        silentError: true,
+        body: JSON.stringify(stock || {})
+      }).catch(() => null);
+    }
+    function deleteWatchlistItemFromServer(code) {
+      api(`/api/v1/watchlist/${encodeURIComponent(code)}`, {
+        method: 'DELETE',
+        timeout: 7000,
+        silentError: true
+      }).catch(() => null);
+    }
     function findStock(code) {
       return state.stocks.find(s => s.code === code)
         || state.screening.find(s => s.code === code)
@@ -2766,6 +2864,7 @@
       if (existing) Object.assign(existing, stock);
       else state.watchlist.unshift(stock);
       saveWatchlist();
+      syncWatchlistItemToServer(stock);
       render();
       toast(existing ? '已更新自选观察' : '已加入自选观察');
     }
@@ -2785,6 +2884,7 @@
     function removeFromWatchlist(code) {
       state.watchlist = state.watchlist.filter(s => s.code !== code);
       saveWatchlist();
+      deleteWatchlistItemFromServer(code);
       render();
       toast('已移出自选');
     }
@@ -3018,7 +3118,7 @@
       state.refreshRunning = true;
       try {
         document.getElementById('serviceText').textContent = '同步中';
-        const [health, stocks, sectors, system, portfolio, positions, orders, stats, news, risk, kill, aiProviders, agents, cacheStatus, dataCoverage, aiTrustee] = await Promise.all([
+        const [health, stocks, sectors, system, portfolio, positions, orders, stats, news, risk, kill, aiProviders, agents, cacheStatus, dataCoverage, aiTrustee, remoteWatchlist] = await Promise.all([
           api('/api/v1/health').catch(() => ({ status: 'error' })),
           api('/api/v1/stocks?limit=10000&offset=0', { timeout: 28000 }).catch(() => ({ stocks: state.stocks })),
           api('/api/v1/sectors', { timeout: 18000 }).catch(() => state.sectors || { sectors: [], summary: {}, flow_history: [] }),
@@ -3034,7 +3134,8 @@
           api('/api/v1/quant/agents').catch(() => ({ agents: [], pipeline: [], logs: [] })),
           api('/api/v1/market/cache/status', { noCache: true }).catch(() => state.marketCache || {}),
           api('/api/v1/market/data-hub/coverage', { noCache: true }).catch(() => state.dataCoverage || {}),
-          api('/api/v1/quant/ai-trustee/status', { noCache: true }).catch(() => state.aiTrustee || {})
+          api('/api/v1/quant/ai-trustee/status', { noCache: true }).catch(() => state.aiTrustee || {}),
+          api('/api/v1/watchlist', { timeout: 7000, noCache: true, silentError: true }).catch(() => null)
         ]);
         state.stocks = stocks.stocks || [];
         state.sectors = sectors || { sectors: [], summary: {}, flow_history: [] };
@@ -3052,6 +3153,10 @@
         state.marketCache = cacheStatus || {};
         state.dataCoverage = dataCoverage || {};
         state.aiTrustee = aiTrustee || state.aiTrustee || {};
+        if (remoteWatchlist && Array.isArray(remoteWatchlist.watchlist)) {
+          state.watchlist = remoteWatchlist.watchlist;
+          saveWatchlist();
+        }
         state.lastUpdate = new Date().toLocaleTimeString();
         document.getElementById('serviceText').textContent = health.status === 'ok' ? '服务正常' : '服务异常';
         document.getElementById('serviceDot').classList.toggle('halt', !!state.kill.active || health.status !== 'ok');
@@ -3248,6 +3353,7 @@
       };
     }
     async function runAIStockPicking() {
+      return runOnceTask('ai-pick', 'AI选股正在运行，请等待当前任务完成', async () => {
       const selected = document.getElementById('aiPickStrategy')?.value;
       if (selected && STRATEGIES[selected]) {
         state.strategy = selected;
@@ -3328,10 +3434,12 @@
         recommended ? `推荐股票：${names.join('、')}。` : '本次AI没有给出推荐购买股票，已保留重点复核池供观察。',
         usedAI ? '本次已使用当前配置模型完成复核。' : '本次未检测到真实AI复核标记，请检查模型配置。'
       ], false);
+      });
     }
     async function runSingleStockAIAnalysis(code) {
       code = code || (state.currentStock || {}).code;
       if (!code) return toast('\u5f53\u524d\u6ca1\u6709\u9009\u4e2d\u7684\u80a1\u7968');
+      return runOnceTask(`single-ai:${code}`, '这只股票的AI分析正在运行，请稍候', async () => {
       const progress = startProgressToast('\u0041\u0049\u6b63\u5728\u5206\u6790\u8fd9\u53ea\u80a1\u7968\uff0c\u8bf7\u7a0d\u7b49...');
       const res = await api(`/api/v1/quant/stocks/${code}/ai-analysis`, {
         method: 'POST',
@@ -3359,8 +3467,10 @@
       }
       switchSection('signals');
       progress.done('AI\u5206\u6790\u5df2\u5b8c\u6210\uff0c\u5df2\u52a0\u5165\u624b\u52a8AI\u5224\u65ad');
+      });
     }
     async function runScreening() {
+      return runOnceTask('screening', '智能选股正在后台运行，请等待完成', async () => {
       toast('智能选股已提交后台...');
       const start = await api('/api/v1/quant/screening/run/start', {
         method: 'POST',
@@ -3372,7 +3482,8 @@
       state.screeningJob = start.job || { job_id: jobId, status: start.status };
       switchSection('screening');
       render();
-      pollScreeningJob(jobId);
+      await pollScreeningJob(jobId);
+      });
     }
     async function pollScreeningJob(jobId) {
       for (let i = 0; i < 900; i += 1) {
@@ -4278,6 +4389,7 @@
     function renderScreening() {
       const logic = state.screeningLogic || {};
       const job = state.screeningJob || {};
+      const screeningLoading = isTaskLoading('screening') || ['queued', 'running', 'poll_error'].includes(job.status);
       const weights = logic.weights || {};
       const weightText = Object.entries(weights)
         .map(([k, v]) => `${screeningFactorName(k)}${Math.round(num(v) * 100)}%`)
@@ -4291,7 +4403,7 @@
         ${head('智能选股', '基础资格、估值财务、量价资金、技术位置、板块资金流、新闻情绪和短线形态联合排名。')}
         <div class="toolbar">
           <div class="field"><label>当前策略</label><select onchange="setStrategy(this.value)">${Object.entries(STRATEGIES).map(([id, s]) => `<option value="${id}" ${state.strategy === id ? 'selected' : ''}>${s.name}</option>`).join('')}</select></div>
-          <button class="btn primary" onclick="runScreening()">重新运行选股</button>
+          <button class="btn primary" onclick="runScreening()" ${screeningLoading ? 'disabled' : ''}>${screeningLoading ? '选股运行中...' : '重新运行选股'}</button>
           <span class="note">${escapeHtml(logic.version || 'support-pool-quality-v5')}</span>
           <span class="note">${escapeHtml(weightText || '等待选股逻辑')}</span>
         </div>
@@ -4473,7 +4585,7 @@
           <td class="num up">${price(plan.suggested_sell_price)}</td>
           <td class="num down">${price(plan.stop_loss_price)}</td>
           <td>${escapeHtml(r.ai_reason || 'AI已复核，但未达到推荐购买条件。')}<div class="stock-code">${escapeHtml(youziLine)}</div></td>
-          <td><button class="btn blue" onclick="event.stopPropagation();runSingleStockAIAnalysis('${r.code}')">单股AI判断</button></td>
+          <td><button class="btn blue" onclick="event.stopPropagation();runSingleStockAIAnalysis('${r.code}')" ${isTaskLoading(`single-ai:${r.code}`) ? 'disabled' : ''}>${isTaskLoading(`single-ai:${r.code}`) ? 'AI分析中...' : '单股AI判断'}</button></td>
         </tr>`;
       }).join('') || emptyRow(9, emptyText, 'signals');
     }
@@ -4496,7 +4608,7 @@
           <td class="num up">${safeText(s.quality_score || s.score)}</td>
           <td>${escapeHtml(pullback.data_status === 'ready' ? `距支撑${safeText(pullback.near_support_pct)}%，箱体${safeText(pullback.box_width_pct)}%` : 'K线或支撑结构待确认')}</td>
           <td>${renderScreeningContext(s)}</td>
-          <td><button class="btn" onclick="event.stopPropagation();runSingleStockAIAnalysis('${s.code}')">AI判断</button> <button class="btn" onclick="event.stopPropagation();quickAddToWatchlist('${s.code}')">加入自选</button></td>
+          <td><button class="btn" onclick="event.stopPropagation();runSingleStockAIAnalysis('${s.code}')" ${isTaskLoading(`single-ai:${s.code}`) ? 'disabled' : ''}>${isTaskLoading(`single-ai:${s.code}`) ? 'AI分析中...' : 'AI判断'}</button> <button class="btn" onclick="event.stopPropagation();quickAddToWatchlist('${s.code}')">加入自选</button></td>
         </tr>`;
       }).join('') || '<tr><td colspan="6"><div class="loading">暂无震荡池股票，请先运行短线策略选股。</div></td></tr>';
     }
@@ -4506,7 +4618,7 @@
         <td class="num ${clsByPct(s.pct_change)}">${price(s.price)}</td>
         <td class="num"><span class="badge ${badgeByPct(s.pct_change)}">${pct(s.pct_change)}</span></td>
         <td>${escapeHtml(s.source || s.market || '策略自选')}</td>
-        <td><button class="btn blue" onclick="event.stopPropagation();runSingleStockAIAnalysis('${s.code}')">AI判断</button> <button class="btn danger" onclick="event.stopPropagation();removeFromWatchlist('${s.code}')">移出</button></td>
+        <td><button class="btn blue" onclick="event.stopPropagation();runSingleStockAIAnalysis('${s.code}')" ${isTaskLoading(`single-ai:${s.code}`) ? 'disabled' : ''}>${isTaskLoading(`single-ai:${s.code}`) ? 'AI分析中...' : 'AI判断'}</button> <button class="btn danger" onclick="event.stopPropagation();removeFromWatchlist('${s.code}')">移出</button></td>
       </tr>`).join('') || '<tr><td colspan="5"><div class="loading">策略交易自选为空，可从行情、详情、震荡池加入。</div></td></tr>';
     }
     function renderStrategyWatchlist() {
@@ -4516,7 +4628,7 @@
           <button class="btn primary" onclick="switchSection('market')">\u53bb\u884c\u60c5\u6dfb\u52a0</button>
           <button class="btn" onclick="switchSection('signals')">\u53bb\u4fe1\u53f7\u9875</button>
           <button class="btn" onclick="state.strategy='short';saveStrategy();runScreening()">\u5237\u65b0\u77ed\u7ebf\u9707\u8361\u6c60</button>
-          <span class="note">\u5f53\u524d\u5171 ${state.watchlist.length} \u53ea\uff0c\u81ea\u9009\u4fdd\u5b58\u5728\u672c\u673a\u6d4f\u89c8\u5668\u3002</span>
+          <span class="note">\u5f53\u524d\u5171 ${state.watchlist.length} \u53ea\uff0c\u81ea\u9009\u4f1a\u540c\u6b65\u5230\u670d\u52a1\u7aef SQLite\uff0c\u5e76\u4fdd\u7559\u672c\u673a\u5907\u4efd\u3002</span>
         </div>
         <div class="card table-wrap"><table><thead><tr><th>\u80a1\u7968</th><th class="num">\u73b0\u4ef7</th><th class="num">\u6da8\u8dcc\u5e45</th><th>\u6765\u6e90</th><th>\u64cd\u4f5c</th></tr></thead><tbody>${renderStrategyWatchlistRows()}</tbody></table></div>`;
     }
@@ -4533,6 +4645,7 @@
       const aiError = (state.aiRecommendations || {}).error || (aiSummary.method === 'AI未完成，本次不生成推荐结果' ? aiSummary.market_view : '');
       const aiJob = state.aiPickJob || {};
       const aiJobRunning = ['queued', 'running', 'poll_error'].includes(aiJob.status);
+      const aiPickLoading = isTaskLoading('ai-pick') || aiJobRunning;
       const aiJobBand = aiJobRunning
         ? `<div class="card pad" style="border-color:#d8e4ff;background:#f7fbff"><div class="panel-title">AI选股后台运行中</div><p class="note">${escapeHtml(aiJob.message || 'AI选股任务仍在后台运行')}</p><p class="note">任务：${escapeHtml(aiJob.job_id || '--')} · ${escapeHtml(aiJob.updated_at || '')}</p></div><div style="height:14px"></div>`
         : '';
@@ -4540,7 +4653,7 @@
         ${head('交易信号', 'AI自动选股只展示推荐购买；手动AI判断会说明暂不推荐、短线或长线，并给出原因。')}
         <div class="toolbar">
           <div class="field"><label>AI选股策略</label><select id="aiPickStrategy" onchange="setStrategy(this.value)">${Object.entries(STRATEGIES).map(([id, s]) => `<option value="${id}" ${state.strategy === id ? 'selected' : ''}>${s.name}</option>`).join('')}</select></div>
-          <button class="btn primary" onclick="runAIStockPicking()">启动AI选股</button>
+          <button class="btn primary" onclick="runAIStockPicking()" ${aiPickLoading ? 'disabled' : ''}>${aiPickLoading ? 'AI选股运行中...' : '启动AI选股'}</button>
           <div class="field"><label>AI选股范围</label><select id="aiPickScope" onchange="setAIPickScope(this.value)"><option value="focus" ${state.aiPickScope !== 'all' ? 'selected' : ''}>关注股票选股</option><option value="all" ${state.aiPickScope === 'all' ? 'selected' : ''}>所有股票选股</option></select></div>
           <button class="btn" onclick="loadSignals()">刷新信号</button>
           <span class="note">当前模型：${escapeHtml(aiMeta.model || (state.ai.config || {}).selected_model || '未启用')}；${aiMeta.used_ai ? '已使用AI复核' : 'AI未完成或尚未运行'}；范围：${escapeHtml((state.aiRecommendations || {}).scope_label || (state.aiPickScope === 'all' ? '所有股票选股' : '关注股票选股'))}</span>
@@ -4567,10 +4680,11 @@
       const advice = buildSignalAdvice();
       const aiRows = (state.aiRecommendations || {}).recommendations || [];
       const aiMeta = (state.aiRecommendations || {}).ai_meta || {};
+      const aiPickLoading = isTaskLoading('ai-pick');
       document.getElementById('signals').innerHTML = `
         ${head('交易信号', '买入、卖出、AI选股和自选股会统一做实时建议，信号只做模拟执行前参考。')}
         <div class="toolbar">
-          <button class="btn primary" onclick="runAIStockPicking()">启动AI选股</button>
+          <button class="btn primary" onclick="runAIStockPicking()" ${aiPickLoading ? 'disabled' : ''}>${aiPickLoading ? 'AI选股运行中...' : '启动AI选股'}</button>
           <button class="btn" onclick="loadSignals()">刷新信号</button>
           <span class="note">当前模型：${escapeHtml(aiMeta.model || (state.ai.config || {}).selected_model || '未启用')}；${aiMeta.used_ai ? '已使用AI复核' : 'AI未完成或尚未运行'}</span>
         </div>
@@ -4693,6 +4807,7 @@
       }
       function renderLab() {
       const lab = state.lab || {};
+      const backtestLoading = Object.keys(state.loadingTasks || {}).some(k => k.startsWith('backtest:'));
       document.getElementById('lab').innerHTML = `
         ${head('回测实验室', '快速验证一个标的的均线策略，先看收益、回撤、胜率和交易次数。')}
         <div class="card pad"><div class="toolbar" style="margin-bottom:0">
@@ -4701,7 +4816,7 @@
           <div class="field"><label>短均线</label><input id="labShort" type="number" min="2" value="${lab.short_window || strategyBacktestParams().short_window}"></div>
           <div class="field"><label>长均线</label><input id="labLong" type="number" min="5" value="${lab.long_window || strategyBacktestParams().long_window}"></div>
           <div class="field"><label>样本天数</label><input id="labDays" type="number" min="30" value="${lab.days || strategyBacktestParams().days}"></div>
-          <button class="btn primary" onclick="runBacktestLab()">运行回测</button>
+          <button class="btn primary" onclick="runBacktestLab()" ${backtestLoading ? 'disabled' : ''}>${backtestLoading ? '回测运行中...' : '运行回测'}</button>
           <button class="btn" onclick="fillLabCodeFromCurrent()">填入当前股票</button>
         </div></div>
         <div style="height:14px"></div>
@@ -5733,12 +5848,14 @@
       const long_window = num(document.getElementById('labLong').value, 20);
       const days = num(document.getElementById('labDays').value, 120);
       if (!code) return toast('请先输入股票代码');
+      return runOnceTask(`backtest:${code}`, '该股票回测正在运行，请等待完成', async () => {
       toast('正在运行回测...');
-      const result = await api('/api/v1/quant/backtest/run', { method: 'POST', timeout: 20000, body: JSON.stringify({ code, short_window, long_window, days, strategy: state.strategy }) }).catch(e => ({ error: e.message }));
+      const result = await api('/api/v1/quant/backtest/run', { method: 'POST', timeout: 50000, body: JSON.stringify({ code, short_window, long_window, days, strategy: state.strategy }) }).catch(e => ({ error: e.message }));
       state.lab = { code, strategy: state.strategy, short_window, long_window, days, result };
       state.currentStock = { code };
       renderLab();
       toast(result.error ? `回测失败：${result.error}` : '回测完成');
+      });
     }
     function fillLabCodeFromCurrent() {
       const code = (state.currentStock || {}).code || '';
@@ -5830,7 +5947,7 @@
           </div>
           <div class="action-strip">
             <button class="btn primary" onclick="addCurrentStockToWatchlist()">加入自选</button>
-            <button class="btn blue" onclick="runSingleStockAIAnalysis('${code}')">AI分析</button>
+            <button class="btn blue" onclick="runSingleStockAIAnalysis('${code}')" ${isTaskLoading(`single-ai:${code}`) ? 'disabled' : ''}>${isTaskLoading(`single-ai:${code}`) ? 'AI分析中...' : 'AI分析'}</button>
             <button class="btn" onclick="createResearchReport('${code}')">生成研究报告</button>
             <button class="btn" onclick="switchSection('lab'); closeModal(); setTimeout(() => { const el = document.getElementById('labCode'); if (el) el.value='${code}'; }, 0)">去回测</button>
             <div class="field"><label>模拟数量</label><input id="tradeQty" type="number" min="100" step="100" value="100"></div>

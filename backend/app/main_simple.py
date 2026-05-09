@@ -12,7 +12,6 @@ import math
 import socket
 import requests
 import threading
-import asyncio
 import subprocess
 import sys
 from datetime import datetime
@@ -37,7 +36,7 @@ from app.services import (
     disclosure_service, strategy_memory_service, trade_review_service,
     ai_trustee_service, trading_calendar_service, auth_service, broker_service,
     sms_code_service, email_code_service, tencent_captcha_service, simple_cache,
-    site_task_assistant
+    site_task_assistant, persistence_service
 )
 from app.backtest.engine import BacktestEngine, create_context_ma_crossover_strategy
 from app.backtest.context import build_context_provider
@@ -56,17 +55,24 @@ from app.reports.daily_report import (
     get_paper_trade_log_path,
 )
 from app.execution.kill_switch import activate_kill_switch, deactivate_kill_switch, get_kill_switch_status, is_kill_switch_active
+from app.core.runtime_config import (
+    AI_TASK_TIMEOUT_SECONDS,
+    BACKTEST_TIMEOUT_SECONDS,
+    HEAVY_TASK_TIMEOUT_SECONDS,
+    INTRADAY_PRIORITY_SECONDS,
+    REALTIME_BATCH_SIZE,
+    REALTIME_LOOP_SECONDS,
+    REALTIME_SECOND_LIMIT,
+    REALTIME_THIRD_LIMIT,
+)
+from app.utils.api_response import api_error as _api_error, install_api_response_handlers
+from app.utils.task_guard import default_heavy_task_guard, run_limited_to_thread
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 BACKEND_ROOT = os.path.dirname(os.path.dirname(__file__))
 SCREENING_JOB_DIR = os.path.join(BACKEND_ROOT, "data", "jobs", "screening")
 SERVER_BOOT_ID = f"{os.getpid()}-{int(time.time())}"
-REALTIME_SECOND_LIMIT = max(20, int(os.getenv("LIANGHUA_REALTIME_SECOND_LIMIT", "60") or 60))
-REALTIME_THIRD_LIMIT = max(20, int(os.getenv("LIANGHUA_REALTIME_THIRD_LIMIT", "60") or 60))
-REALTIME_BATCH_SIZE = max(10, int(os.getenv("LIANGHUA_REALTIME_BATCH_SIZE", "30") or 30))
-REALTIME_LOOP_SECONDS = max(3.0, float(os.getenv("LIANGHUA_REALTIME_LOOP_SECONDS", "10") or 10))
-INTRADAY_PRIORITY_SECONDS = max(30.0, float(os.getenv("LIANGHUA_INTRADAY_PRIORITY_SECONDS", "60") or 60))
 
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0'
 
@@ -101,6 +107,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+install_api_response_handlers(app, logger)
 
 
 @app.middleware("http")
@@ -162,6 +170,11 @@ def _current_user(request: Request) -> dict | None:
     return getattr(request.state, "user", None)
 
 
+def _current_user_id(request: Request | None = None) -> str:
+    user = _current_user(request) if request is not None else None
+    return str((user or {}).get("phone") or (user or {}).get("username") or (user or {}).get("id") or persistence_service.DEFAULT_USER_ID)
+
+
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
     path = request.url.path or "/"
@@ -172,7 +185,7 @@ async def auth_middleware(request: Request, call_next):
         return await call_next(request)
     user = auth_service.get_user_by_token(_auth_token_from_request(request))
     if not user:
-        return JSONResponse(status_code=401, content={"ok": False, "error": "请先登录后访问本站。"})
+        return _api_error("请先登录后访问本站。", code="UNAUTHORIZED", status_code=401)
     request.state.user = user
     if request.method not in ("GET", "HEAD", "OPTIONS"):
         if user.get("role") == auth_service.ROLE_VISITOR and (
@@ -180,12 +193,9 @@ async def auth_middleware(request: Request, call_next):
             or path.startswith("/api/v1/auth/users")
             or path.startswith("/api/v1/brokers/")
         ):
-            return JSONResponse(
-                status_code=403,
-                content={"ok": False, "error": "访问账号为只读参观权限，不能修改重要参数、密钥、交易或实盘接入。"},
-            )
+            return _api_error("访问账号为只读参观权限，不能修改重要参数、密钥、交易或实盘接入。", code="FORBIDDEN", status_code=403)
         if path in SUB_ADMIN_REQUIRED_PATHS and auth_service.ROLE_RANK.get(user.get("role"), 0) < auth_service.ROLE_RANK[auth_service.ROLE_SUB_ADMIN]:
-            return JSONResponse(status_code=403, content={"ok": False, "error": "该操作需要次管理或最高管理权限。"})
+            return _api_error("该操作需要次管理或最高管理权限。", code="FORBIDDEN", status_code=403)
     return await call_next(request)
 
 _stock_cache = {"stocks": [], "updated_at": 0}
@@ -515,6 +525,18 @@ def _run_screening_job(job_id: str, params: dict):
     started = time.time()
     strategy = params.get("strategy")
     task_id = params.get("task_id") or job_id
+    task_key = f"screening:{strategy or 'default'}"
+    acquired, busy_message = default_heavy_task_guard.acquire(task_key, "智能选股")
+    if not acquired:
+        _update_screening_job(
+            job_id,
+            status="failed",
+            stage="busy",
+            message=busy_message,
+            error=busy_message,
+            finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        )
+        return
     agent_workspace.start_task(
         "score",
         "screening",
@@ -616,6 +638,8 @@ def _run_screening_job(job_id: str, params: dict):
             finished_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         )
         agent_workspace.finish_task(task_id, status="failed", message=f"智能选股失败：{exc}", error=str(exc))
+    finally:
+        default_heavy_task_guard.release(task_key)
 
 
 def _run_disclosure_backfill(params: dict):
@@ -1752,7 +1776,14 @@ async def run_screening(payload: dict | None = Body(default=None)):
                 "logic": stock_screener.get_screening_logic_summary(),
             }
             return simple_cache.mark(payload, False)
-    results = await asyncio.to_thread(trading_engine.manual_screening)
+    results = await run_limited_to_thread(
+        f"screening:{strategy or state_store.get_user_settings().get('trading_style', 'short')}",
+        "智能选股",
+        HEAVY_TASK_TIMEOUT_SECONDS,
+        trading_engine.manual_screening,
+    )
+    if isinstance(results, dict) and results.get("error"):
+        return results
     agent_workspace.record_event("score", "screening", f"选股完成：{len(results)} 个候选。")
     payload = {
         "message": "选股完成",
@@ -1912,7 +1943,11 @@ async def run_ai_signal_pick(payload: dict | None = Body(default=None)):
     universe_limit = int(payload.get("universe_limit", 20) or 20)
     scope = payload.get("scope") or "focus"
     focus_codes = payload.get("focus_codes") or []
-    result = await asyncio.to_thread(
+    focus_sig = ",".join(sorted([str(c) for c in focus_codes])[:100])
+    result = await run_limited_to_thread(
+        f"ai-pick:{strategy}:{scope}:{focus_sig}",
+        "AI选股",
+        AI_TASK_TIMEOUT_SECONDS,
         ai_stock_picker.run_ai_stock_picking,
         strategy=strategy,
         limit=limit,
@@ -1920,6 +1955,8 @@ async def run_ai_signal_pick(payload: dict | None = Body(default=None)):
         scope=scope,
         focus_codes=focus_codes,
     )
+    if isinstance(result, dict) and result.get("error"):
+        return result
     agent_workspace.record_event(
         "decision",
         "ai_stock_pick",
@@ -1938,6 +1975,19 @@ async def run_ai_signal_pick(payload: dict | None = Body(default=None)):
 
 def _run_ai_pick_job(job_id: str, payload: dict):
     task_id = payload.get("task_id") or job_id
+    task_key = f"ai-pick:{_ai_pick_running_key(payload)}"
+    acquired, busy_message = default_heavy_task_guard.acquire(task_key, "AI选股")
+    if not acquired:
+        with _ai_pick_jobs_lock:
+            job = _ai_pick_jobs.get(job_id) or {}
+            job.update({
+                "status": "failed",
+                "message": busy_message,
+                "result": {"ok": False, "error": busy_message, "code": "TASK_ALREADY_RUNNING"},
+                "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            })
+            _ai_pick_jobs[job_id] = job
+        return
     def update_progress(progress: dict):
         with _ai_pick_jobs_lock:
             job = _ai_pick_jobs.get(job_id) or {}
@@ -2042,12 +2092,44 @@ def _run_ai_pick_job(job_id: str, payload: dict):
                 "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             })
         agent_workspace.finish_task(task_id, status="failed", message=message, result=result, error=str(exc))
+    finally:
+        default_heavy_task_guard.release(task_key)
+
+
+def _ai_pick_running_key(payload: dict) -> str:
+    strategy = payload.get("strategy") or state_store.get_user_settings().get("trading_style", "short")
+    scope = payload.get("scope") or "focus"
+    focus_codes = payload.get("focus_codes") or []
+    focus_sig = ",".join(sorted([str(c) for c in focus_codes])[:100])
+    return f"{strategy}:{scope}:{focus_sig}"
+
+
+def _recent_running_ai_pick_job(payload: dict) -> dict | None:
+    target_key = _ai_pick_running_key(payload)
+    with _ai_pick_jobs_lock:
+        active = [
+            dict(job)
+            for job in _ai_pick_jobs.values()
+            if job.get("status") in ("queued", "running")
+            and _ai_pick_running_key(job.get("payload") or {}) == target_key
+        ]
+    active.sort(key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)
+    return active[0] if active else None
 
 
 @app.post("/api/v1/quant/signals/ai-pick/start")
 async def start_ai_signal_pick(payload: dict | None = Body(default=None)):
     """后台启动AI选股，前端轮询状态，避免浏览器长请求中断。"""
     payload = payload or {}
+    running = _recent_running_ai_pick_job(payload)
+    if running:
+        return {
+            "job_id": running.get("job_id"),
+            "status": running.get("status"),
+            "message": "相同AI选股任务正在运行，已复用当前任务。",
+            "job": running,
+            "deduped": True,
+        }
     job_id = f"AI_PICK_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
     task_id = f"ai-pick-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
     payload["task_id"] = task_id
@@ -2096,7 +2178,7 @@ async def get_latest_ai_signal_pick_status():
 
 
 @app.post("/api/v1/quant/stocks/{code}/ai-analysis")
-async def run_single_stock_ai_analysis(code: str, payload: dict | None = Body(default=None)):
+async def run_single_stock_ai_analysis(request: Request, code: str, payload: dict | None = Body(default=None)):
     """对单只股票执行AI分析，并加入AI推荐/分析列表。"""
     payload = payload or {}
     strategy = payload.get("strategy") or state_store.get_user_settings().get("trading_style", "short")
@@ -2105,8 +2187,19 @@ async def run_single_stock_ai_analysis(code: str, payload: dict | None = Body(de
     if memory_cached is not None:
         return simple_cache.mark(memory_cached, True)
     try:
-        result = ai_stock_picker.analyze_single_stock(code, strategy=strategy)
+        result = await run_limited_to_thread(
+            f"single-ai:{code}:{strategy}",
+            f"{code} 单股AI分析",
+            AI_TASK_TIMEOUT_SECONDS,
+            ai_stock_picker.analyze_single_stock,
+            code,
+            strategy=strategy,
+        )
+        if isinstance(result, dict) and result.get("error"):
+            return result
         analysis = result.get("analysis", {})
+        persistence_service.record_recent_stock(_current_user_id(request), code, analysis.get("name") or analysis.get("stock_name") or code, source="ai_analysis", extra={"strategy": strategy})
+        persistence_service.record_ai_analysis(_current_user_id(request), code, strategy=strategy, result=_json_safe(result))
         agent_workspace.record_event(
             "decision",
             "single_stock_ai_analysis",
@@ -2706,6 +2799,7 @@ async def get_stock_minutes(code: str):
             "source": "unavailable",
             "status": "unavailable",
             "message": "分时数据暂不可用。",
+            "error": "分时数据暂不可用。",
             "cache": False,
         }
 
@@ -2742,7 +2836,8 @@ async def get_stock_kline(code: str, period: int = Query(101), days: int = Query
             "klines": [],
             "source": "unavailable",
             "status": "unavailable",
-            "message": "K线数据缺失。",
+            "message": "股票代码不存在或K线数据缺失。",
+            "error": "股票代码不存在或K线数据缺失。",
         }
         return simple_cache.mark(payload, False)
     if period == 101 and state_store.get_daily_bars(code) is None:
@@ -2775,6 +2870,9 @@ async def get_stock_kline(code: str, period: int = Query(101), days: int = Query
         "validation_report": validation_report,
         "message": message,
     }
+    if not klines:
+        payload["message"] = payload["message"] or "股票代码不存在或K线数据缺失。"
+        payload["error"] = payload["message"]
     simple_cache.set(cache_key, payload, simple_cache.TTL_KLINE_SECONDS)
     return simple_cache.mark(payload, False)
 
@@ -2993,6 +3091,80 @@ async def get_ai_config():
     return ai_model_service.get_config_public()
 
 
+@app.get("/api/v1/settings")
+async def get_app_settings(request: Request):
+    """获取轻量持久化设置，API Key 只返回脱敏信息。"""
+    user_id = _current_user_id(request)
+    return {
+        "ok": True,
+        "db": persistence_service.db_status(),
+        "ai": persistence_service.get_ai_settings(user_id),
+        "runtime_ai": ai_model_service.get_config_public(),
+    }
+
+
+@app.post("/api/v1/settings/ai")
+async def save_ai_settings(request: Request, payload: dict = Body(default=None)):
+    """保存 AI 连接配置到 SQLite，并同步到现有 AI 配置文件供业务链路使用。"""
+    payload = payload or {}
+    user_id = _current_user_id(request)
+    provider = str(payload.get("provider") or "").strip()
+    base_url = str(payload.get("base_url") or "").strip()
+    api_key = str(payload.get("api_key") or "").strip()
+    selected_model = str(payload.get("selected_model") or payload.get("model") or "").strip()
+    enabled = payload.get("enabled")
+    existing_public = ai_model_service.get_config_public()
+    if provider or base_url or api_key:
+        ai_model_service.update_connection_config(provider or existing_public.get("provider") or "openai_compatible", base_url or existing_public.get("base_url") or "", api_key)
+    if selected_model:
+        ai_model_service.select_model(selected_model)
+    saved = persistence_service.save_ai_settings(
+        user_id,
+        provider=provider or existing_public.get("provider") or "",
+        base_url=base_url or existing_public.get("base_url") or "",
+        api_key=api_key,
+        selected_model=selected_model or existing_public.get("selected_model") or "",
+        enabled=bool(enabled) if enabled is not None else bool(api_key or existing_public.get("has_api_key")),
+        extra={"saved_from": "settings_api"},
+    )
+    agent_workspace.record_event("decision", "ai_settings_persist", "AI 配置已写入 SQLite 持久化层。", payload={"provider": saved.get("provider"), "has_api_key": saved.get("has_api_key")})
+    return {"ok": True, "config": saved, "db": persistence_service.db_status()}
+
+
+@app.get("/api/v1/watchlist")
+async def get_watchlist(request: Request):
+    """获取服务端持久化自选股。"""
+    return {"ok": True, "watchlist": persistence_service.list_watchlist(_current_user_id(request))}
+
+
+@app.post("/api/v1/watchlist")
+async def add_watchlist_item(request: Request, payload: dict = Body(default=None)):
+    """新增或更新服务端持久化自选股。"""
+    result = persistence_service.upsert_watchlist_item(_current_user_id(request), payload or {})
+    if not result.get("ok"):
+        return result
+    return {"ok": True, "item": result.get("item"), "watchlist": persistence_service.list_watchlist(_current_user_id(request))}
+
+
+@app.delete("/api/v1/watchlist/{symbol}")
+async def delete_watchlist_item(request: Request, symbol: str):
+    """删除服务端持久化自选股。"""
+    result = persistence_service.delete_watchlist_item(_current_user_id(request), symbol)
+    return {"ok": True, **result, "watchlist": persistence_service.list_watchlist(_current_user_id(request))}
+
+
+@app.get("/api/v1/ai/history")
+async def get_ai_analysis_history(request: Request, limit: int = Query(50, ge=1, le=200), symbol: str = Query("")):
+    """查询 AI 分析历史记录。"""
+    return {"ok": True, "history": persistence_service.list_ai_history(_current_user_id(request), limit=limit, symbol=symbol)}
+
+
+@app.get("/api/v1/backtest/history")
+async def get_backtest_history(request: Request, limit: int = Query(50, ge=1, le=200), symbol: str = Query("")):
+    """查询策略回测历史记录。"""
+    return {"ok": True, "history": persistence_service.list_backtests(_current_user_id(request), limit=limit, symbol=symbol)}
+
+
 @app.get("/api/v1/ai/strategy-memory")
 async def get_ai_strategy_memory():
     """查看模型无关的站内策略记忆。"""
@@ -3168,6 +3340,7 @@ async def clear_ai_config(confirm: bool = Body(False, embed=True)):
 
 @app.post("/api/v1/quant/backtest/run")
 async def run_backtest(
+    request: Request,
     code: str = Body(..., embed=True),
     strategy_type: str = Body("short", alias="strategy", embed=True),
     short_window: int = Body(5, embed=True),
@@ -3177,43 +3350,67 @@ async def run_backtest(
     announcement_window_days: int = Body(5, embed=True),
 ):
     """运行新闻、公告、情绪环境联合回测"""
-    daily_df = state_store.get_daily_bars(code)
-    if daily_df is None:
-        daily_df = data_fetcher.fetch_kline(code, period=101, days=days)
-    if daily_df is None or daily_df.empty:
-        return {"error": f"无法获取{code}的K线数据"}
+    def _run():
+        daily_df = state_store.get_daily_bars(code)
+        if daily_df is None:
+            daily_df = data_fetcher.fetch_kline(code, period=101, days=days)
+        if daily_df is None or daily_df.empty:
+            return {"error": f"无法获取{code}的K线数据"}
 
-    stock_info = state_store.get_stock_info(code) or {}
-    market_snapshot = news_service.get_market_sentiment()
-    sentiment_snapshot = calc_sentiment_score(code)
-    context_provider = build_context_provider(
-        news=state_store.get_news(),
-        stock_name=stock_info.get("name", ""),
-        market_snapshot=market_snapshot,
-        sentiment_snapshot=sentiment_snapshot,
-        news_window_days=news_window_days,
-        announcement_window_days=announcement_window_days,
+        stock_info = state_store.get_stock_info(code) or {}
+        market_snapshot = news_service.get_market_sentiment()
+        sentiment_snapshot = calc_sentiment_score(code)
+        context_provider = build_context_provider(
+            news=state_store.get_news(),
+            stock_name=stock_info.get("name", ""),
+            market_snapshot=market_snapshot,
+            sentiment_snapshot=sentiment_snapshot,
+            news_window_days=news_window_days,
+            announcement_window_days=announcement_window_days,
+        )
+        strategy_func = create_context_ma_crossover_strategy(short_window, long_window)
+        engine = BacktestEngine(initial_cash=200000.0)
+        result = engine.run(daily_df, strategy_func, symbol=code, name=stock_info.get("name", ""), context_provider=context_provider)
+
+        report = generate_backtest_report(result)
+        report["strategy_type"] = strategy_type
+        report["context_summary"] = result.get("context_summary", {})
+        report["context_samples"] = result.get("context_samples", [])
+        report["joint_context"] = {
+            "enabled": True,
+            "description": "新闻、公告、情绪环境与当时K线市场状态联合参与买入过滤、风险退出和仓位倍率。",
+            "weights": {
+                "news": 0.25,
+                "announcement": 0.20,
+                "sentiment_env": 0.20,
+                "market_state": 0.35,
+            },
+            "news_window_days": news_window_days,
+            "announcement_window_days": announcement_window_days,
+        }
+        return report
+
+    report = await run_limited_to_thread(
+        f"backtest:{code}:{strategy_type}:{short_window}:{long_window}:{days}:{news_window_days}:{announcement_window_days}",
+        f"{code} 策略回测",
+        BACKTEST_TIMEOUT_SECONDS,
+        _run,
     )
-    strategy_func = create_context_ma_crossover_strategy(short_window, long_window)
-    engine = BacktestEngine(initial_cash=200000.0)
-    result = engine.run(daily_df, strategy_func, symbol=code, name=stock_info.get("name", ""), context_provider=context_provider)
-
-    report = generate_backtest_report(result)
-    report["strategy_type"] = strategy_type
-    report["context_summary"] = result.get("context_summary", {})
-    report["context_samples"] = result.get("context_samples", [])
-    report["joint_context"] = {
-        "enabled": True,
-        "description": "新闻、公告、情绪环境与当时K线市场状态联合参与买入过滤、风险退出和仓位倍率。",
-        "weights": {
-            "news": 0.25,
-            "announcement": 0.20,
-            "sentiment_env": 0.20,
-            "market_state": 0.35,
-        },
-        "news_window_days": news_window_days,
-        "announcement_window_days": announcement_window_days,
-    }
+    if isinstance(report, dict) and not report.get("error"):
+        persistence_service.record_recent_stock(_current_user_id(request), code, source="backtest", extra={"strategy": strategy_type})
+        persistence_service.record_backtest(
+            _current_user_id(request),
+            code,
+            strategy=strategy_type,
+            params={
+                "short_window": short_window,
+                "long_window": long_window,
+                "days": days,
+                "news_window_days": news_window_days,
+                "announcement_window_days": announcement_window_days,
+            },
+            result=_json_safe(report),
+        )
     return report
 
 
