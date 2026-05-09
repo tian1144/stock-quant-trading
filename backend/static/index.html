@@ -2138,9 +2138,31 @@
         state.aiChatLayout = layout;
         event.preventDefault?.();
       };
+      const bindPanelDocumentDrag = () => {
+        document.addEventListener('pointermove', movePanel, { capture: true, passive: false });
+        document.addEventListener('mousemove', movePanel, { capture: true, passive: false });
+        document.addEventListener('touchmove', movePanel, { capture: true, passive: false });
+        document.addEventListener('pointerup', stopPanelDrag, true);
+        document.addEventListener('mouseup', stopPanelDrag, true);
+        document.addEventListener('touchend', stopPanelDrag, true);
+        document.addEventListener('pointercancel', stopPanelDrag, true);
+        document.addEventListener('touchcancel', stopPanelDrag, true);
+      };
+      const unbindPanelDocumentDrag = () => {
+        document.removeEventListener('pointermove', movePanel, true);
+        document.removeEventListener('mousemove', movePanel, true);
+        document.removeEventListener('touchmove', movePanel, true);
+        document.removeEventListener('pointerup', stopPanelDrag, true);
+        document.removeEventListener('mouseup', stopPanelDrag, true);
+        document.removeEventListener('touchend', stopPanelDrag, true);
+        document.removeEventListener('pointercancel', stopPanelDrag, true);
+        document.removeEventListener('touchcancel', stopPanelDrag, true);
+      };
       const stopPanelDrag = event => {
         if (!state.aiChatDragging) return;
         state.aiChatDragging = null;
+        unbindPanelDocumentDrag();
+        panel.classList.remove('dragging');
         panel.releasePointerCapture?.(event.pointerId);
         saveAIChatLayout();
       };
@@ -2150,6 +2172,8 @@
         const rect = panel.getBoundingClientRect();
         state.aiChatDragging = { dx: point.x - rect.left, dy: point.y - rect.top, width: rect.width, height: rect.height };
         panel.setPointerCapture?.(event.pointerId);
+        panel.classList.add('dragging');
+        bindPanelDocumentDrag();
         panel.style.right = 'auto';
         panel.style.bottom = 'auto';
         panel.style.width = `${rect.width}px`;
@@ -2280,6 +2304,26 @@
         applyAIChatLaunchLayout();
         event.preventDefault?.();
       };
+      const bindLaunchDocumentDrag = () => {
+        document.addEventListener('pointermove', moveLaunch, { capture: true, passive: false });
+        document.addEventListener('mousemove', moveLaunch, { capture: true, passive: false });
+        document.addEventListener('touchmove', moveLaunch, { capture: true, passive: false });
+        document.addEventListener('pointerup', stopLaunch, true);
+        document.addEventListener('mouseup', stopLaunch, true);
+        document.addEventListener('touchend', stopLaunch, true);
+        document.addEventListener('pointercancel', stopLaunch, true);
+        document.addEventListener('touchcancel', stopLaunch, true);
+      };
+      const unbindLaunchDocumentDrag = () => {
+        document.removeEventListener('pointermove', moveLaunch, true);
+        document.removeEventListener('mousemove', moveLaunch, true);
+        document.removeEventListener('touchmove', moveLaunch, true);
+        document.removeEventListener('pointerup', stopLaunch, true);
+        document.removeEventListener('mouseup', stopLaunch, true);
+        document.removeEventListener('touchend', stopLaunch, true);
+        document.removeEventListener('pointercancel', stopLaunch, true);
+        document.removeEventListener('touchcancel', stopLaunch, true);
+      };
       const stopLaunch = event => {
         if (!state.aiChatLaunchDragging) return;
         const drag = state.aiChatLaunchDragging;
@@ -2289,6 +2333,8 @@
           toggleAIChat(false);
         }
         btn.releasePointerCapture?.(event.pointerId);
+        unbindLaunchDocumentDrag();
+        btn.classList.remove('dragging');
         setAIChatLaunchDragUi(false, false);
         state.aiChatLaunchDragging = moved ? { moved: true } : null;
         saveAIChatLaunchLayout();
@@ -2308,6 +2354,8 @@
           startY: point.y
         };
         btn.setPointerCapture?.(event.pointerId);
+        btn.classList.add('dragging');
+        bindLaunchDocumentDrag();
         setAIChatLaunchDragUi(true, false);
       };
       btn.addEventListener('pointerdown', startLaunchDrag);
@@ -6648,4 +6696,5 @@
   </script>
 </body>
 </html>
+
 
