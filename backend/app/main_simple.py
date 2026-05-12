@@ -1,7 +1,7 @@
 ﻿from fastapi import FastAPI, Query, Body
 from fastapi import Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from contextlib import asynccontextmanager
 import logging
 import os
@@ -2397,6 +2397,68 @@ def payload_watchlist_safe() -> list:
     return []
 
 
+def _site_ai_chat_context(payload: dict, message: str) -> tuple[str, dict]:
+    current_stock = payload.get("current_stock") if isinstance(payload.get("current_stock"), dict) else None
+    strategy = state_store.get_user_settings().get("trading_style", "short")
+    matched_stocks = _site_ai_match_stocks(message, current_stock=current_stock)
+    stock_context = [_site_ai_stock_context(stock, strategy) for stock in matched_stocks]
+    context = {
+        "project": {
+            "name": "量化智能猎人",
+            "positioning": "小型、灵活、信息理解能力强的A股量化投研和模拟交易工具",
+            "safety": "真实交易默认关闭，当前以研究、信号、风控复核和模拟盘为主",
+        },
+        "assistant_permissions": {
+            "scope": "只读问答助手",
+            "can_query": "可以查询本网站股票池、实时行情缓存、K线缓存、分时、评分卡、决策、风控、新闻、板块、选股结果、AI推荐、模拟盘、持仓、熔断和Agent状态。",
+            "cannot_do": "不能修改网站参数，不能替用户下单，不能泄露或复述API密钥、密钥片段、鉴权头、后端本地敏感配置。",
+        },
+        "current_page": payload.get("page"),
+        "current_stock": current_stock,
+        "client_watchlist": payload.get("watchlist", [])[:80] if isinstance(payload.get("watchlist"), list) else [],
+        "matched_stocks": stock_context,
+        "strategy": strategy,
+        "stock_universe_count": len(state_store.get_stock_universe()),
+        "screening_top": state_store.get_screening_results()[:8],
+        "ai_recommendations": (state_store.get_ai_recommendations().get("recommendations") or [])[:8],
+        "trade_review_learning": trade_review_service.get_trade_review_candidates(limit=8),
+        "portfolio": state_store.get_portfolio(),
+        "positions": list(state_store.get_positions().values())[:10],
+        "risk": risk_manager.get_risk_config(),
+        "kill_switch": get_kill_switch_status(),
+        "news_sample": state_store.get_news()[:8],
+        "system_state": state_store.get_system_state(),
+    }
+    system_prompt = (
+        "你是本网站内置的AI助手，熟悉本项目所有功能：行情、板块、新闻风控、智能选股、交易信号、"
+        "个股详情、AI模型配置、Agent工作台、回测、模拟盘和熔断。"
+        "你对本网站拥有只读查询能力：可以根据站内上下文回答股票、行情、K线、分时、选股、信号、风控、新闻、板块、持仓、模拟盘和Agent状态。"
+        "你不能修改网站参数，不能替用户下单，不能泄露API密钥、密钥片段、鉴权头或本地敏感配置。"
+        "回答必须使用中文，结合站内上下文；如果 matched_stocks 中有命中的股票，必须优先使用其中的数据直接回答，不要说站内没有这只股票。"
+        "涉及买卖时必须提醒这只是研究和模拟盘参考，不能跳过风控复核。"
+        "如果用户问功能怎么用，要给出页面入口和操作步骤；如果问股票，要说明你查到的数据来源、最新交易日或是否缺少K线/实时缓存。"
+        "如果用户问交割单学习，要说明 OCR候选、PDF原则、已校验复盘 三类证据边界；未校验OCR不能当成真实交易流水。"
+        "站内上下文里可能包含历史文件遗留的乱码字段，遇到乱码请忽略，不要说用户输入是乱码。"
+    )
+    return system_prompt, context
+
+
+def _sse_event(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _site_task_done_text(job: dict) -> str:
+    result = (job or {}).get("result") or {}
+    email = result.get("email") or {}
+    lines = [
+        "任务完成。",
+        f"摘要：{result.get('summary')}" if result.get("summary") else "",
+        "PDF报告已生成，可在任务产物中下载。" if result.get("pdf_url") else "",
+        f"邮件：{email.get('message') or ('已发送' if email.get('sent') else '未发送')}" if email.get("requested") else "",
+    ]
+    return "\n".join([line for line in lines if line])
+
+
 @app.post("/api/v1/ai/chat")
 async def ai_chat(payload: dict = Body(...)):
     """站内AI对话：带上网站当前状态摘要，让模型理解本系统。"""
@@ -2475,6 +2537,98 @@ async def ai_chat(payload: dict = Body(...)):
         payload={"used_ai": meta.get("used_ai"), "model": meta.get("model"), "page": payload.get("page")},
     )
     return {"ok": meta.get("ok", False), "answer": answer, "ai_meta": meta}
+
+
+@app.post("/api/v1/ai/chat/stream")
+async def ai_chat_stream(payload: dict = Body(...)):
+    """站内AI对话流式接口：SSE 推送普通问答、任务启动和任务进度。"""
+    message = str(payload.get("message", "")).strip()
+    if not message:
+        return StreamingResponse(
+            iter([_sse_event("error", {"text": "请先输入问题。"}), _sse_event("done", {"ok": False})]),
+            media_type="text/event-stream",
+        )
+
+    def event_stream():
+        try:
+            yield _sse_event("meta", {"mode": "thinking", "message": "正在理解需求..."})
+            task_intent = site_task_assistant.classify_task(message)
+            if task_intent.get("can_execute"):
+                title = task_intent.get("title") or "站内AI任务"
+                yield _sse_event("delta", {"text": f"已理解为可执行任务：{title}。\n正在生成任务计划并启动后台执行...\n"})
+                started = site_task_assistant.start_task(message, payload)
+                if not started.get("ok"):
+                    yield _sse_event("error", {"text": started.get("error", "任务启动失败。"), "intent": task_intent})
+                    yield _sse_event("done", {"ok": False, "mode": "task"})
+                    return
+                job = started.get("job") or {}
+                job_id = job.get("job_id") or job.get("id") or ""
+                yield _sse_event("task_started", {
+                    "message": "任务已启动。我会持续同步进度，不会显示内部任务号。",
+                    "task": {"job_id": job_id, "status": job.get("status"), "progress": job.get("progress")},
+                    "intent": task_intent,
+                })
+                last_text = ""
+                last_heartbeat = time.time()
+                for _ in range(240):
+                    time.sleep(1.5)
+                    data = site_task_assistant.get_job(job_id) if job_id else {"ok": False, "error": "任务编号缺失"}
+                    if not data.get("ok"):
+                        yield _sse_event("task_progress", {"message": data.get("error", "任务状态暂时不可用，正在重试。")})
+                        continue
+                    current = data.get("job") or {}
+                    status = current.get("status")
+                    if status == "done":
+                        final_text = _site_task_done_text(current)
+                        yield _sse_event("final", {"text": final_text, "mode": "task", "task": {"status": status, "progress": current.get("progress")}})
+                        yield _sse_event("done", {"ok": True, "mode": "task"})
+                        return
+                    if status == "failed":
+                        yield _sse_event("error", {"text": f"任务失败：{current.get('error') or current.get('message') or '未知错误'}", "mode": "task"})
+                        yield _sse_event("done", {"ok": False, "mode": "task"})
+                        return
+                    progress = current.get("progress") or {}
+                    text = f"任务执行中：{current.get('message') or current.get('stage') or '处理中'} ({progress.get('current', 0)}/{progress.get('total', 5)})"
+                    now = time.time()
+                    if text != last_text or now - last_heartbeat >= 10:
+                        yield _sse_event("task_progress", {"message": text, "progress": progress, "status": status})
+                        last_text = text
+                        last_heartbeat = now
+                yield _sse_event("task_progress", {"message": "任务还在后台执行，可以稍后用 Ctrl+Shift+A 呼出我继续查看。"})
+                yield _sse_event("done", {"ok": True, "mode": "task", "background": True})
+                return
+
+            yield _sse_event("meta", {"mode": "chat", "message": "正在收集站内数据..."})
+            system_prompt, context = _site_ai_chat_context(payload, message)
+            yield _sse_event("meta", {"mode": "chat", "message": "正在生成回答..."})
+            for event in ai_model_service.chat_text_stream("deep_analysis", system_prompt, message, context, profile="chat_assistant"):
+                event_type = event.get("type") or "delta"
+                if event_type == "delta":
+                    yield _sse_event("delta", {"text": event.get("text", "")})
+                elif event_type == "meta":
+                    yield _sse_event("meta", {"ai_meta": event.get("meta") or {}})
+                elif event_type == "final":
+                    meta = event.get("meta") or {}
+                    agent_workspace.record_event(
+                        "decision",
+                        "site_ai_chat_stream",
+                        "站内AI流式对话已响应。",
+                        payload={"used_ai": meta.get("used_ai"), "model": meta.get("model"), "page": payload.get("page")},
+                    )
+                    yield _sse_event("final", {"ai_meta": meta})
+                elif event_type == "error":
+                    yield _sse_event("error", {"text": event.get("text") or "模型调用失败。", "ai_meta": event.get("meta") or {}})
+            yield _sse_event("done", {"ok": True, "mode": "chat"})
+        except Exception as exc:
+            logger.exception("AI stream failed")
+            yield _sse_event("error", {"text": f"流式回复失败：{exc}"})
+            yield _sse_event("done", {"ok": False})
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.post("/api/v1/ai/tasks/start")
@@ -3591,3 +3745,4 @@ async def deactivate_kill():
 async def get_kill_switch():
     """获取熔断开关状态"""
     return get_kill_switch_status()
+

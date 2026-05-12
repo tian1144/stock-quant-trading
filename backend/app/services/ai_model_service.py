@@ -10,7 +10,7 @@ import os
 import re
 import time
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import requests
@@ -699,6 +699,145 @@ def _post_chat_completion(
             "task_key": task_key,
             "error": str(exc),
         }
+
+
+def _split_stream_fallback_text(text: str) -> Iterator[str]:
+    text = (text or "").strip()
+    if not text:
+        return
+    parts = re.split(r"(\n+|[。！？；.!?;])", text)
+    buffer = ""
+    for part in parts:
+        if not part:
+            continue
+        buffer += part
+        if len(buffer) >= 36 or part.strip() in {"。", "！", "？", "；", ".", "!", "?", ";"} or "\n" in part:
+            yield buffer
+            buffer = ""
+    if buffer:
+        yield buffer
+
+
+def _stream_openai_compatible_chat(
+    entry: dict,
+    task_key: str,
+    system_prompt: str,
+    user_content: str,
+    temperature: float,
+    timeout: int,
+) -> Iterator[dict]:
+    provider = entry.get("provider") or "openai_compatible"
+    model = entry.get("selected_model") or ""
+    policy = get_task_policy(task_key)
+    max_tokens = int(policy.get("max_tokens") or 0) or None
+    payload = _chat_request_json(provider, model, system_prompt, user_content, temperature, json_mode=False, max_tokens=max_tokens)
+    payload["stream"] = True
+    response = requests.post(
+        _completion_url(entry.get("base_url", ""), provider, model, entry.get("api_key", "")),
+        headers={**_headers(provider, entry.get("api_key", "")), "Content-Type": "application/json"},
+        json=payload,
+        timeout=timeout,
+        stream=True,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"模型流式调用失败：HTTP {response.status_code} {response.text[:300]}")
+    chunk_count = 0
+    for raw_line in response.iter_lines(decode_unicode=True):
+        if not raw_line:
+            continue
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("data:"):
+            line = line[5:].strip()
+        if not line or line == "[DONE]":
+            break
+        try:
+            payload = json.loads(line)
+        except Exception:
+            continue
+        choice = (payload.get("choices") or [{}])[0]
+        delta = choice.get("delta") or {}
+        text = delta.get("content") or choice.get("text") or ""
+        if text:
+            chunk_count += 1
+            yield {"type": "delta", "text": str(text)}
+    if chunk_count <= 0:
+        raise RuntimeError("模型没有返回流式内容")
+
+
+def chat_text_stream(task_key: str, system_prompt: str, user_message: str, context: Optional[dict] = None, profile: str = "main") -> Iterator[dict]:
+    """Stream ordinary conversation. Falls back to non-streaming chunks if a provider does not support SSE."""
+    config = _read_config_raw()
+    entry, role = _get_profile_config(config, profile, fallback_main=True)
+    if not _profile_ready(entry):
+        yield {
+            "type": "error",
+            "text": "当前还没有启用可用的大模型。请先在“智能模型”页面配置接口地址、密钥并选择模型。",
+            "meta": {"ok": False, "used_ai": False, "role": role, "error": "AI模型尚未配置或未启用"},
+        }
+        return
+
+    policy = get_task_policy(task_key)
+    temperature = float(policy.get("temperature", policy.get("default_temperature", 0.15)) or 0.15)
+    timeout = int(policy.get("timeout_seconds", 60) or 60)
+    memory_context = strategy_memory_service.get_model_memory_context(task_key)
+    if memory_context:
+        system_prompt = f"{system_prompt}\n\n【站内策略记忆】\n{memory_context}"
+    context_payload = _json_safe(context or {})
+    if isinstance(context_payload, dict):
+        context_payload.setdefault("strategy_memory", strategy_memory_service.get_strategy_memory())
+    context_text = json.dumps(context_payload, ensure_ascii=False)
+    user_content = f"站内上下文：\n{context_text}\n\n用户问题：\n{user_message}"
+
+    attempts = [(entry, role)]
+    if profile != "main" and role != "main":
+        main_entry, _ = _get_profile_config(config, "main", fallback_main=True)
+        if _profile_ready(main_entry):
+            attempts.append((main_entry, "main"))
+
+    last_error = ""
+    for attempt_entry, attempt_role in attempts:
+        provider = attempt_entry.get("provider") or "openai_compatible"
+        model = attempt_entry.get("selected_model") or ""
+        meta = {
+            "ok": True,
+            "used_ai": True,
+            "role": attempt_role,
+            "provider": provider,
+            "model": model,
+            "task_key": task_key,
+            "temperature": temperature,
+            "timeout_seconds": timeout,
+            **({"fallback_from": role, "fallback_error": last_error} if attempt_role == "main" and role != "main" else {}),
+        }
+        yield {"type": "meta", "meta": meta}
+        protocol = PROVIDERS.get(provider, PROVIDERS["openai_compatible"]).get("protocol", "openai_compatible")
+        try:
+            if protocol == "openai_compatible":
+                for event in _stream_openai_compatible_chat(attempt_entry, task_key, system_prompt, user_content, temperature, timeout):
+                    yield event
+                yield {"type": "final", "meta": meta}
+                return
+            answer, fallback_meta = _post_chat_completion(attempt_entry, task_key, system_prompt, user_content, temperature, timeout)
+            fallback_meta["role"] = attempt_role
+            if not fallback_meta.get("ok"):
+                raise RuntimeError(fallback_meta.get("error") or "模型调用失败")
+            for chunk in _split_stream_fallback_text((answer or "").strip() or "模型没有返回有效内容。"):
+                yield {"type": "delta", "text": chunk}
+            yield {"type": "final", "meta": fallback_meta}
+            return
+        except Exception as exc:
+            last_error = str(exc)
+            if attempt_role != "main" and len(attempts) > 1:
+                yield {"type": "delta", "text": "\n小窗专用模型连接不稳定，正在切换默认主模型继续回答...\n"}
+                continue
+            yield {
+                "type": "error",
+                "text": f"模型调用失败：{last_error}",
+                "meta": {**meta, "ok": False, "used_ai": False, "error": last_error},
+            }
+            return
 
 
 def get_task_policy(task_key: str) -> dict:

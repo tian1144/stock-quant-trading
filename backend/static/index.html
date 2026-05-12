@@ -2685,25 +2685,108 @@
       if (!text) return;
       input.value = '';
       state.aiChat.messages.push({ role: 'user', text });
-      state.aiChat.messages.push({ role: 'assistant', text: '正在思考...' });
+      const assistantMessage = { role: 'assistant', text: '正在理解需求...' };
+      state.aiChat.messages.push(assistantMessage);
       renderAIChat({ forceScroll: true });
-      const res = await api('/api/v1/ai/chat', {
-        method: 'POST',
-        timeout: 120000,
-        body: JSON.stringify({
-          message: text,
-          page: state.active,
-          current_stock: state.currentStock || null,
-          watchlist: state.watchlist || [],
-          active_strategy: state.strategy
-        })
-      }).catch(e => ({ answer: `对话失败：${e.message}`, ai_meta: { used_ai: false } }));
-      state.aiChat.messages.pop();
-      state.aiChat.messages.push({ role: 'assistant', text: res.answer || '没有拿到有效回复。' });
-      renderAIChat({ forceScroll: true });
-      if (res.mode === 'task' && res.task?.job_id) {
-        pollAIExecutableTask(res.task.job_id);
+      const payload = {
+        message: text,
+        page: state.active,
+        current_stock: state.currentStock || null,
+        watchlist: state.watchlist || [],
+        active_strategy: state.strategy
+      };
+      const setAssistantText = nextText => {
+        assistantMessage.text = nextText || '';
+        renderAIChat();
+      };
+      try {
+        const streamed = await streamAIChat(payload, {
+          onStatus: status => {
+            if (!assistantMessage.text || /^正在/.test(assistantMessage.text)) setAssistantText(status);
+          },
+          onDelta: chunk => {
+            if (/^正在/.test(assistantMessage.text)) assistantMessage.text = '';
+            assistantMessage.text += chunk || '';
+            renderAIChat();
+          },
+          onTaskStarted: data => {
+            const message = data?.message || '任务已启动，正在同步执行进度...';
+            if (!assistantMessage.text || /^正在/.test(assistantMessage.text)) setAssistantText(message);
+            if (data?.task?.job_id) assistantMessage.taskJobId = data.task.job_id;
+          },
+          onTaskProgress: data => {
+            setAssistantText(data?.message || '任务执行中...');
+          },
+          onFinal: data => {
+            if (data?.text) setAssistantText(data.text);
+          },
+          onError: data => {
+            const message = data?.text || data?.error || '流式回复失败。';
+            setAssistantText(assistantMessage.text && !/^正在/.test(assistantMessage.text) ? `${assistantMessage.text}\n${message}` : message);
+          }
+        });
+        if (!streamed.ok && assistantMessage.taskJobId) pollAIExecutableTask(assistantMessage.taskJobId);
+      } catch (streamErr) {
+        const res = await api('/api/v1/ai/chat', {
+          method: 'POST',
+          timeout: 120000,
+          body: JSON.stringify(payload)
+        }).catch(e => ({ answer: `对话失败：${e.message}`, ai_meta: { used_ai: false } }));
+        setAssistantText(res.answer || `流式回复失败：${streamErr.message || streamErr}`);
+        if (res.mode === 'task' && res.task?.job_id) {
+          pollAIExecutableTask(res.task.job_id);
+        }
       }
+    }
+    async function streamAIChat(payload, handlers = {}) {
+      const res = await fetch(`${API_BASE}/api/v1/ai/chat/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {}) },
+        body: JSON.stringify(payload),
+        cache: 'no-store'
+      });
+      if (!res.ok || !res.body) {
+        throw new Error(`流式接口不可用：HTTP ${res.status}`);
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+      let ok = true;
+      const dispatch = (event, data) => {
+        if (event === 'meta' && data?.message) handlers.onStatus?.(data.message);
+        if (event === 'delta') handlers.onDelta?.(data?.text || '');
+        if (event === 'task_started') handlers.onTaskStarted?.(data || {});
+        if (event === 'task_progress') handlers.onTaskProgress?.(data || {});
+        if (event === 'final') handlers.onFinal?.(data || {});
+        if (event === 'error') {
+          ok = false;
+          handlers.onError?.(data || {});
+        }
+      };
+      const parseBlock = block => {
+        const lines = block.split(/\r?\n/);
+        let event = 'message';
+        const dataLines = [];
+        lines.forEach(line => {
+          if (line.startsWith('event:')) event = line.slice(6).trim();
+          if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart());
+        });
+        if (!dataLines.length) return;
+        let data = {};
+        try { data = JSON.parse(dataLines.join('\n')); } catch { data = { text: dataLines.join('\n') }; }
+        dispatch(event, data);
+      };
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const blocks = buffer.split(/\r?\n\r?\n/);
+        buffer = blocks.pop() || '';
+        blocks.forEach(parseBlock);
+      }
+      buffer += decoder.decode();
+      if (buffer.trim()) parseBlock(buffer);
+      return { ok };
     }
     async function pollAIExecutableTask(jobId) {
       let lastText = '';
@@ -6976,4 +7059,5 @@
   </script>
 </body>
 </html>
+
 
