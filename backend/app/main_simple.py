@@ -36,7 +36,8 @@ from app.services import (
     disclosure_service, strategy_memory_service, trade_review_service,
     ai_trustee_service, trading_calendar_service, auth_service, broker_service,
     sms_code_service, email_code_service, tencent_captcha_service, simple_cache,
-    site_task_assistant, persistence_service
+    site_task_assistant, persistence_service,
+    knowledge_base_service, knowledge_answer_service, feishu_service
 )
 from app.backtest.engine import BacktestEngine, create_context_ma_crossover_strategy
 from app.backtest.context import build_context_provider
@@ -120,7 +121,7 @@ async def no_cache_middleware(request: Request, call_next):
         response.headers["Expires"] = "0"
     return response
 
-PUBLIC_PATHS = {"/", "/api/v1/health", "/api/v1/auth/login", "/api/v1/auth/sms-login", "/api/v1/auth/email-login", "/api/v1/auth/sms/send", "/api/v1/auth/email/send", "/api/v1/auth/captcha/config", "/api/v1/auth/email/config"}
+PUBLIC_PATHS = {"/", "/api/v1/health", "/api/v1/auth/login", "/api/v1/auth/sms-login", "/api/v1/auth/email-login", "/api/v1/auth/sms/send", "/api/v1/auth/email/send", "/api/v1/auth/captcha/config", "/api/v1/auth/email/config", "/api/v1/integrations/feishu/events"}
 PUBLIC_PREFIXES = ("/static/",)
 VISITOR_BLOCKED_PATHS = {
     "/api/v1/quant/settings",
@@ -192,11 +193,78 @@ async def auth_middleware(request: Request, call_next):
             path in VISITOR_BLOCKED_PATHS
             or path.startswith("/api/v1/auth/users")
             or path.startswith("/api/v1/brokers/")
+            or (path.startswith("/api/v1/knowledge/") and request.method != "GET")
         ):
             return _api_error("访问账号为只读参观权限，不能修改重要参数、密钥、交易或实盘接入。", code="FORBIDDEN", status_code=403)
+        if path.startswith("/api/v1/knowledge/") and path != "/api/v1/knowledge/query" and request.method != "GET" and auth_service.ROLE_RANK.get(user.get("role"), 0) < auth_service.ROLE_RANK[auth_service.ROLE_SUB_ADMIN]:
+            return _api_error("知识库维护需要次管理或最高管理权限。", code="FORBIDDEN", status_code=403)
         if path in SUB_ADMIN_REQUIRED_PATHS and auth_service.ROLE_RANK.get(user.get("role"), 0) < auth_service.ROLE_RANK[auth_service.ROLE_SUB_ADMIN]:
             return _api_error("该操作需要次管理或最高管理权限。", code="FORBIDDEN", status_code=403)
     return await call_next(request)
+
+
+@app.get("/api/v1/knowledge/status")
+async def get_knowledge_status():
+    return {
+        "ok": True,
+        "status": knowledge_base_service.db_status(),
+        "feishu": feishu_service.config_public(),
+        "no_answer_text": knowledge_base_service.NO_ANSWER_TEXT,
+    }
+
+
+@app.get("/api/v1/knowledge/items")
+async def list_knowledge_items(
+    search: str = Query("", max_length=200),
+    limit: int = Query(100, ge=1, le=300),
+    offset: int = Query(0, ge=0),
+    enabled: str = Query(""),
+):
+    enabled_filter = enabled if enabled in {"0", "1"} else None
+    return knowledge_base_service.list_items(search=search.strip(), limit=limit, offset=offset, enabled=enabled_filter)
+
+
+@app.post("/api/v1/knowledge/items")
+async def upsert_knowledge_item(payload: dict = Body(default=None)):
+    return knowledge_base_service.upsert_item(payload or {})
+
+
+@app.delete("/api/v1/knowledge/items/{item_id}")
+async def delete_knowledge_item(item_id: int):
+    return knowledge_base_service.delete_item(item_id)
+
+
+@app.post("/api/v1/knowledge/import")
+async def import_knowledge_items(payload: dict = Body(default=None)):
+    payload = payload or {}
+    return knowledge_base_service.import_text(
+        filename=str(payload.get("filename") or "knowledge.txt"),
+        content=str(payload.get("content") or ""),
+        category=str(payload.get("category") or ""),
+        source=str(payload.get("source") or ""),
+    )
+
+
+@app.post("/api/v1/knowledge/query")
+async def query_knowledge(payload: dict = Body(default=None)):
+    payload = payload or {}
+    question = str(payload.get("question") or "").strip()
+    include_matches = bool(payload.get("include_matches", True))
+    result = knowledge_answer_service.answer_from_knowledge(question)
+    if not include_matches:
+        result = {**result, "matches": []}
+    return result
+
+
+@app.post("/api/v1/integrations/feishu/events")
+async def receive_feishu_event(payload: dict = Body(default=None)):
+    result = feishu_service.handle_event(payload or {})
+    if "challenge" in result:
+        return {"challenge": result.get("challenge", "")}
+    if not result.get("ok", False):
+        return JSONResponse(result, status_code=403)
+    return result
+
 
 _stock_cache = {"stocks": [], "updated_at": 0}
 _stock_detail_cache = {}

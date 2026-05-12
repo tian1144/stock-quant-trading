@@ -1549,6 +1549,7 @@
       <section class="section" id="news"></section>
       <section class="section" id="risk"></section>
       <section class="section" id="datahub"></section>
+      <section class="section" id="knowledge"></section>
       <section class="section" id="ai"></section>
       <section class="section" id="accounts"></section>
       <section class="section" id="tradeReview"></section>
@@ -1638,6 +1639,7 @@
       ['lab', '回测', '实验室'],
       ['news', '新闻', '事件流'],
       ['risk', '风控', '黑盒复核'],
+      ['knowledge', '知识库', '飞书客服'],
       ['ai', '智能模型', '模型配置'],
       ['accounts', '账号', '邀请权限'],
       ['tradeReview', '交割单', '复盘校验'],
@@ -1649,7 +1651,7 @@
       { id: 'market_group', title: '行情投研', sub: '行情研究', sections: [['market', '行情', '股票搜索'], ['sectors', '板块', '资金归因'], ['watchlist', '自选', '观察池'], ['research', '研究', '个股报告']] },
       { id: 'strategy_group', title: '策略交易', sub: '策略模拟', sections: [['strategy', '策略', '模式切换'], ['strategyWatchlist', '自选', '策略股票'], ['screening', '选股', '候选排序'], ['signals', '信号', '交易建议'], ['portfolio', '持仓', '模拟盘'], ['lab', '回测', '实验室']] },
       { id: 'risk_group', title: '消息风控', sub: '新闻风控', sections: [['news', '新闻', '事件流'], ['risk', '风控', '黑盒复核']] },
-      { id: 'system_group', title: '系统配置', sub: '模型智能体', sections: [['datahub', '数据', '覆盖率'], ['ai', '智能模型', '模型密钥'], ['accounts', '账号', '邀请权限'], ['tradeReview', '交割单', '复盘校验'], ['agents', '智能体', '工作台']] }
+      { id: 'system_group', title: '系统配置', sub: '模型智能体', sections: [['datahub', '数据', '覆盖率'], ['knowledge', '知识库', '飞书客服'], ['ai', '智能模型', '模型密钥'], ['accounts', '账号', '邀请权限'], ['tradeReview', '交割单', '复盘校验'], ['agents', '智能体', '工作台']] }
     ];
 
     const state = {
@@ -1698,6 +1700,7 @@
       sectorDetailCache: {},
       marketTab: 'all',
       ai: { providers: [], config: {}, detectResult: null },
+      knowledge: { items: [], total: 0, status: {}, feishu: {}, search: '', selected: null, query: '', queryResult: null },
       auth: { user: null, permissions: {}, users: [], roles: {} },
       captcha: { config: null, loading: null },
       email: { config: null },
@@ -3123,7 +3126,21 @@
       if (renderAfter && state.active === 'ai' && !isAIFormEditing()) renderAI();
       if (showToast) toast('智能模型配置已刷新');
     }
-      async function refreshDataHubData({ renderAfter = true } = {}) {
+      async function refreshKnowledgeData({ renderAfter = true, showToast = false } = {}) {
+      const search = encodeURIComponent((state.knowledge || {}).search || '');
+      const [items, status] = await Promise.all([
+        api(`/api/v1/knowledge/items?limit=100&search=${search}`, { timeout: 9000, noCache: true }).catch(() => ({ items: [], total: 0, status: {} })),
+        api('/api/v1/knowledge/status', { timeout: 9000, noCache: true }).catch(() => ({ status: {}, feishu: {} }))
+      ]);
+      state.knowledge.items = items.items || [];
+      state.knowledge.total = items.total || 0;
+      state.knowledge.status = status.status || items.status || {};
+      state.knowledge.feishu = status.feishu || {};
+      state.loadedSections.knowledge = true;
+      if (renderAfter && state.active === 'knowledge') renderKnowledge();
+      if (showToast) toast('知识库已刷新');
+    }
+    async function refreshDataHubData({ renderAfter = true } = {}) {
       const [cacheStatus, dataCoverage] = await Promise.all([
         api('/api/v1/market/cache/status', { timeout: 9000, noCache: true }).catch(() => state.marketCache || {}),
         api('/api/v1/market/data-hub/coverage', { timeout: 12000, noCache: true }).catch(() => state.dataCoverage || {})
@@ -3176,6 +3193,7 @@
       if (id === 'risk' && !state.loadedSections.risk) return refreshRiskData();
         if (id === 'datahub' && !state.loadedSections.datahub) return refreshDataHubData();
         if (id === 'ai' && !state.loadedSections.ai) return refreshAIData();
+        if (id === 'knowledge' && !state.loadedSections.knowledge) return refreshKnowledgeData();
         if (id === 'accounts') return refreshAccountsData();
         if (id === 'agents' && !state.loadedSections.agents) return refreshAgentsData();
       }
@@ -4152,6 +4170,7 @@
       if (state.active === 'news') renderNews();
       if (state.active === 'risk') renderRisk();
       if (state.active === 'datahub') renderDataHub();
+      if (state.active === 'knowledge') renderKnowledge();
       if (state.active === 'ai' && !isAIFormEditing()) renderAI();
       if (state.active === 'accounts') renderAccounts();
       if (state.active === 'tradeReview') renderTradeReview();
@@ -5603,6 +5622,143 @@
     }
     function dataRuleName(key) {
       return ({ universe_sync: '主数据', kline_backfill: 'K线补库', realtime: '实时快照', intraday: '分时队列', priority: '优先级' })[key] || key;
+    }
+    function renderKnowledge() {
+      const kb = state.knowledge || {};
+      const status = kb.status || {};
+      const feishu = kb.feishu || {};
+      const selected = kb.selected || { enabled: true };
+      const canEdit = canModifySensitive() && !isReadonly();
+      const rows = (kb.items || []).map(item => `
+        <tr onclick="selectKnowledgeItem(${item.id})">
+          <td><div class="stock-name">${escapeHtml(item.title || '--')}</div><div class="stock-code">${escapeHtml(item.category || '未分类')}</div></td>
+          <td>${escapeHtml((item.tags || []).join('，') || '--')}</td>
+          <td>${escapeHtml(item.source || '--')}</td>
+          <td><span class="badge ${item.enabled ? 'green' : 'gray'}">${item.enabled ? '启用' : '停用'}</span></td>
+          <td>${escapeHtml(item.updated_at || '--')}</td>
+        </tr>`).join('') || emptyRow(5, '暂无知识条目', 'knowledge');
+      const matches = (((kb.queryResult || {}).matches) || []).map(m => `
+        <div class="kv-row" style="grid-template-columns:120px minmax(0,1fr)">
+          <span>${escapeHtml(m.title || `条目 ${m.item_id || ''}`)}</span>
+          <strong>${escapeHtml((m.content || '').slice(0, 180))}</strong>
+        </div>`).join('');
+      document.getElementById('knowledge').innerHTML = `
+        ${head('飞书客服知识库', '飞书机器人只基于这里命中的资料回答；没有可靠命中时固定拒答，禁止编造。')}
+        ${readonlyBanner()}
+        <div class="grid cols-4">
+          ${metric('知识条目', safeText(status.items, kb.total || 0), `启用 ${safeText(status.enabled_items, 0)}`, 'up')}
+          ${metric('分片数量', safeText(status.chunks, 0), status.fts_available ? 'FTS5全文检索' : 'LIKE检索', status.fts_available ? 'up' : 'warn')}
+          ${metric('飞书配置', feishu.enabled ? '已配置' : '未完成', `App ${feishu.has_app_id ? '有' : '无'} / Token ${feishu.has_verification_token ? '有' : '无'}`, feishu.enabled ? 'up' : 'warn')}
+          ${metric('安全规则', '仅数据库依据', '无命中固定拒答', 'up')}
+        </div>
+        <div style="height:14px"></div>
+        <div class="toolbar">
+          <div class="field search-field"><label>搜索知识</label><input id="knowledgeSearch" value="${escapeHtml(kb.search || '')}" onkeydown="if(event.key==='Enter') refreshKnowledgeFromSearch()" placeholder="标题、正文、分类、标签"></div>
+          <button class="btn" onclick="refreshKnowledgeFromSearch()">搜索</button>
+          <button class="btn" onclick="refreshKnowledgeData({showToast:true})">刷新</button>
+          <button class="btn primary" onclick="newKnowledgeItem()" ${canEdit ? '' : 'disabled'}>新建知识</button>
+        </div>
+        <div class="grid cols-2">
+          <div class="card pad">
+            <div class="panel-title" style="padding:0 0 12px;border-bottom:0">知识编辑</div>
+            <div class="grid cols-2">
+              <div class="field"><label>标题</label><input id="kbTitle" value="${escapeHtml(selected.title || '')}" ${canEdit ? '' : 'disabled'}></div>
+              <div class="field"><label>分类</label><input id="kbCategory" value="${escapeHtml(selected.category || '')}" ${canEdit ? '' : 'disabled'}></div>
+              <div class="field"><label>标签</label><input id="kbTags" value="${escapeHtml((selected.tags || []).join('，'))}" placeholder="多个标签用逗号分隔" ${canEdit ? '' : 'disabled'}></div>
+              <div class="field"><label>来源</label><input id="kbSource" value="${escapeHtml(selected.source || '')}" ${canEdit ? '' : 'disabled'}></div>
+            </div>
+            <div class="field wide"><label>正文</label><textarea id="kbContent" rows="9" ${canEdit ? '' : 'disabled'}>${escapeHtml(selected.content || '')}</textarea></div>
+            <div class="toolbar" style="margin-bottom:0">
+              <label class="note"><input id="kbEnabled" type="checkbox" ${selected.enabled !== false ? 'checked' : ''} ${canEdit ? '' : 'disabled'}> 启用</label>
+              <button class="btn primary" onclick="saveKnowledgeItem()" ${canEdit ? '' : 'disabled'}>保存知识</button>
+              <button class="btn danger" onclick="deleteKnowledgeItem()" ${canEdit && selected.id ? '' : 'disabled'}>删除</button>
+            </div>
+          </div>
+          <div class="card pad">
+            <div class="panel-title" style="padding:0 0 12px;border-bottom:0">导入与测试</div>
+            <div class="grid cols-2">
+              <div class="field"><label>导入分类</label><input id="kbImportCategory" placeholder="例如：售前、规则、产品"></div>
+              <div class="field"><label>导入来源</label><input id="kbImportSource" placeholder="文件或资料来源"></div>
+            </div>
+            <div class="field wide"><label>导入文件（txt/md/csv）</label><input id="kbImportFile" type="file" accept=".txt,.md,.csv,text/plain,text/markdown,text/csv" ${canEdit ? '' : 'disabled'}></div>
+            <button class="btn" onclick="importKnowledgeFile()" ${canEdit ? '' : 'disabled'}>导入文件</button>
+            <div style="height:14px"></div>
+            <div class="field wide"><label>搜索预览 / 客服测试</label><textarea id="kbQuestion" rows="3" placeholder="输入用户可能会问的问题">${escapeHtml(kb.query || '')}</textarea></div>
+            <button class="btn primary" onclick="queryKnowledgePreview()">测试回答</button>
+            <div style="height:14px"></div>
+            ${(kb.queryResult || {}).answer ? `<div class="loading" style="text-align:left">${escapeHtml(kb.queryResult.answer)}</div>` : '<div class="loading">输入问题后可查看命中依据和最终回答。</div>'}
+            ${matches ? `<div class="kv" style="margin-top:12px">${matches}</div>` : ''}
+          </div>
+        </div>
+        <div style="height:14px"></div>
+        <div class="card table-wrap"><table><thead><tr><th>标题</th><th>标签</th><th>来源</th><th>状态</th><th>更新时间</th></tr></thead><tbody>${rows}</tbody></table></div>
+      `;
+    }
+    function refreshKnowledgeFromSearch() {
+      state.knowledge.search = document.getElementById('knowledgeSearch')?.value.trim() || '';
+      state.loadedSections.knowledge = false;
+      refreshKnowledgeData({ showToast: false });
+    }
+    function newKnowledgeItem() {
+      state.knowledge.selected = { enabled: true, title: '', content: '', category: '', tags: [], source: '' };
+      renderKnowledge();
+    }
+    function selectKnowledgeItem(id) {
+      state.knowledge.selected = (state.knowledge.items || []).find(item => String(item.id) === String(id)) || { enabled: true };
+      renderKnowledge();
+    }
+    async function saveKnowledgeItem() {
+      const selected = state.knowledge.selected || {};
+      const payload = {
+        id: selected.id || undefined,
+        title: document.getElementById('kbTitle')?.value.trim() || '',
+        category: document.getElementById('kbCategory')?.value.trim() || '',
+        tags: document.getElementById('kbTags')?.value.trim() || '',
+        source: document.getElementById('kbSource')?.value.trim() || '',
+        content: document.getElementById('kbContent')?.value.trim() || '',
+        enabled: !!document.getElementById('kbEnabled')?.checked,
+      };
+      if (!payload.title || !payload.content) return toast('标题和正文不能为空');
+      const res = await api('/api/v1/knowledge/items', { method: 'POST', body: JSON.stringify(payload), timeout: 12000 }).catch(e => ({ ok: false, error: e.message }));
+      if (!res.ok) return toast(res.error || '知识保存失败');
+      state.knowledge.selected = res.item || null;
+      await refreshKnowledgeData({ showToast: false });
+      toast('知识已保存');
+    }
+    async function deleteKnowledgeItem() {
+      const selected = state.knowledge.selected || {};
+      if (!selected.id) return;
+      if (!confirm(`确定删除知识：${selected.title || selected.id}？`)) return;
+      const res = await api(`/api/v1/knowledge/items/${encodeURIComponent(selected.id)}`, { method: 'DELETE', timeout: 12000 }).catch(e => ({ ok: false, error: e.message }));
+      if (!res.ok) return toast(res.error || '知识删除失败');
+      state.knowledge.selected = null;
+      await refreshKnowledgeData({ showToast: false });
+      toast('知识已删除');
+    }
+    async function importKnowledgeFile() {
+      const file = document.getElementById('kbImportFile')?.files?.[0];
+      if (!file) return toast('请选择 txt、md 或 csv 文件');
+      const content = await file.text();
+      const payload = {
+        filename: file.name,
+        content,
+        category: document.getElementById('kbImportCategory')?.value.trim() || '',
+        source: document.getElementById('kbImportSource')?.value.trim() || file.name,
+      };
+      const res = await api('/api/v1/knowledge/import', { method: 'POST', body: JSON.stringify(payload), timeout: 20000 }).catch(e => ({ ok: false, error: e.message }));
+      if (!res.ok) return toast(res.error || '导入失败');
+      await refreshKnowledgeData({ showToast: false });
+      toast(`导入完成：${safeText(res.count, 0)} 条`);
+    }
+    async function queryKnowledgePreview() {
+      const question = document.getElementById('kbQuestion')?.value.trim() || '';
+      if (!question) return toast('请输入测试问题');
+      state.knowledge.query = question;
+      state.knowledge.queryResult = { answer: '正在检索知识库...' };
+      renderKnowledge();
+      const res = await api('/api/v1/knowledge/query', { method: 'POST', body: JSON.stringify({ question, include_matches: true }), timeout: 30000 }).catch(e => ({ ok: false, answer: e.message, matches: [] }));
+      state.knowledge.queryResult = res;
+      renderKnowledge();
     }
     function renderTradeReviewRows() {
       const rows = state.tradeReview.rows || [];
