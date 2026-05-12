@@ -137,6 +137,8 @@ def install_api_response_handlers(app, logger):
     async def api_response_format_middleware(request: Request, call_next):
         response = await call_next(request)
         path = request.url.path or ""
+        if path == "/api/v1/integrations/feishu/events":
+            return response
         if not path.startswith("/api/v1/"):
             return response
         content_type = response.headers.get("content-type", "")
