@@ -99,6 +99,55 @@ _logs: Dict[str, List[dict]] = {agent_id: [] for agent_id in AGENTS}
 _tasks: Dict[str, dict] = {}
 _started_at = time.time()
 
+AGENT_TOOL_POOLS: Dict[str, List[str]] = {
+    "data": ["realtime_quotes", "stock_universe", "daily_kline", "intraday", "market_snapshot"],
+    "news": ["news", "announcements", "disclosure_risk", "sentiment_events"],
+    "technical": ["daily_kline", "intraday", "technical_indicators", "limit_moves"],
+    "capital": ["sector_money_flow", "money_flow", "sector_rankings", "limit_moves"],
+    "sentiment": ["market_sentiment", "limit_moves", "sector_heat", "news"],
+    "score": ["candidate_stocks", "ai_recommendations", "score_card", "backtest_summary"],
+    "decision": ["task_planning", "ai_recommendations", "portfolio", "risk", "strategy_memory"],
+    "risk": ["risk", "kill_switch", "risk_config", "disclosure_risk"],
+    "execution": ["portfolio", "orders", "paper_trade", "email", "pdf"],
+    "review": ["strategy_memory", "orders", "portfolio", "trade_review"],
+}
+
+TOOL_AGENT_MAP: Dict[str, List[str]] = {}
+for _agent_id, _tools in AGENT_TOOL_POOLS.items():
+    AGENTS.setdefault(_agent_id, {})["tool_pool"] = list(_tools)
+    for _tool in _tools:
+        TOOL_AGENT_MAP.setdefault(_tool, []).append(_agent_id)
+
+
+def get_agent_tool_catalog() -> dict:
+    """Return the tool pools that the site AI orchestrator may route work to."""
+    return {
+        "agents": [
+            {
+                "id": agent_id,
+                "name": meta.get("name"),
+                "role": meta.get("role"),
+                "tools": list(AGENT_TOOL_POOLS.get(agent_id, [])),
+                "artifact": meta.get("artifact"),
+                "guardrail": meta.get("guardrail"),
+            }
+            for agent_id, meta in AGENTS.items()
+        ],
+        "tool_to_agents": {tool: list(agent_ids) for tool, agent_ids in TOOL_AGENT_MAP.items()},
+    }
+
+
+def agents_for_tools(tools: List[str]) -> List[str]:
+    """Infer the minimum ordered Agent route for a requested tool list."""
+    ordered: List[str] = []
+    for tool in tools or []:
+        for agent_id in TOOL_AGENT_MAP.get(str(tool), []):
+            if agent_id not in ordered:
+                ordered.append(agent_id)
+    if not ordered:
+        ordered = ["data", "decision", "risk"]
+    return [agent_id for agent_id in ordered if agent_id in AGENTS]
+
 
 def _now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -491,7 +540,7 @@ def snapshot_all(reason: str = "manual") -> dict:
     for agent_id in AGENTS:
         status = _agent_status(agent_id)
         state = {
-            "agent": {k: status[k] for k in ("id", "name", "role", "artifact", "handoff", "guardrail")},
+            "agent": {k: status[k] for k in ("id", "name", "role", "tool_pool", "artifact", "handoff", "guardrail")},
             "status": status["status"],
             "status_text": status["status_text"],
             "metrics": status["metrics"],
@@ -514,6 +563,7 @@ def snapshot_all(reason: str = "manual") -> dict:
             "task_count": len(_load_tasks()),
             "active_task_count": len([t for t in _load_tasks().values() if t.get("status") in {"queued", "running"}]),
             "task_store": _tasks_path(),
+            "agent_tool_catalog": get_agent_tool_catalog(),
         },
         "agents": agents,
         "pipeline": [

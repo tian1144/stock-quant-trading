@@ -5888,6 +5888,7 @@
         <div class="agent-metrics">${Object.entries(metrics).map(([k, v]) => `<div class="agent-metric"><span>${escapeHtml(k)}</span><b>${escapeHtml(v)}</b></div>`).join('') || '<div class="note">暂无指标</div>'}</div>
         <div class="kv">
           ${kv('产物', artifactName(agent.artifact))}
+          ${kv('工具池', (agent.tool_pool || []).slice(0, 6).join(' / ') || '--')}
           ${kv('交接状态', handoffName(agent.handoff))}
           ${kv('边界', agent.guardrail)}
           ${task ? kv('当前任务', `${safeText(task.title)} / ${safeText(task.message || task.stage)}`) : ''}

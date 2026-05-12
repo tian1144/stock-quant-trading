@@ -55,6 +55,54 @@ TASK_TOOL_ALLOWLIST = {
 }
 
 
+def _agent_catalog_for_planner() -> dict:
+    catalog = agent_workspace.get_agent_tool_catalog()
+    return {
+        "agents": [
+            {
+                "id": item.get("id"),
+                "role": item.get("role"),
+                "tools": [tool for tool in (item.get("tools") or []) if tool in TASK_TOOL_ALLOWLIST or tool in {"stock_universe", "daily_kline", "intraday", "market_snapshot", "money_flow", "sector_rankings", "market_sentiment", "score_card", "backtest_summary", "task_planning", "paper_trade", "trade_review"}],
+                "guardrail": item.get("guardrail"),
+            }
+            for item in (catalog.get("agents") or [])
+        ],
+        "tool_to_agents": catalog.get("tool_to_agents") or {},
+    }
+
+
+def _normalize_agent_route(route, tools: list, objective: str = "") -> list:
+    valid_agents = set(agent_workspace.AGENTS.keys())
+    tool_set = set(tools or [])
+    rows = []
+    for item in route or []:
+        if not isinstance(item, dict):
+            continue
+        agent_id = str(item.get("agent_id") or item.get("id") or "").strip()
+        if agent_id not in valid_agents:
+            continue
+        item_tools = [str(x) for x in (item.get("tools") or []) if str(x) in tool_set or str(x) in agent_workspace.AGENT_TOOL_POOLS.get(agent_id, [])]
+        if not item_tools:
+            item_tools = [tool for tool in (tools or []) if agent_id in agent_workspace.TOOL_AGENT_MAP.get(tool, [])]
+        rows.append({
+            "agent_id": agent_id,
+            "objective": str(item.get("objective") or item.get("task") or objective or "collect evidence"),
+            "tools": item_tools[:8],
+            "expected_output": str(item.get("expected_output") or item.get("deliverable") or agent_workspace.AGENTS[agent_id].get("artifact") or "evidence"),
+        })
+    if rows:
+        return rows[:10]
+    return [
+        {
+            "agent_id": agent_id,
+            "objective": objective or "collect evidence for the site AI orchestrator",
+            "tools": [tool for tool in (tools or []) if agent_id in agent_workspace.TOOL_AGENT_MAP.get(tool, [])][:8],
+            "expected_output": agent_workspace.AGENTS[agent_id].get("artifact"),
+        }
+        for agent_id in agent_workspace.agents_for_tools(tools)
+    ][:10]
+
+
 def _now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -215,6 +263,7 @@ def _classify_task_with_model(message: str) -> Optional[dict]:
             "pdf": "generate markdown/PDF artifact",
             "email": "send email only when explicitly requested and recipient is known",
         },
+        "available_agents": _agent_catalog_for_planner(),
     }
     schema = """{
   "task_type": "chat|site_report|investment_report",
@@ -227,6 +276,7 @@ def _classify_task_with_model(message: str) -> Optional[dict]:
   "intent_reason": "Chinese explanation of the real user intent",
   "confidence": 0.0,
   "tools": ["sectors", "sector_money_flow"],
+  "agent_route": [{"agent_id": "capital", "tools": ["sector_money_flow"], "objective": "collect sector money-flow evidence", "expected_output": "capital_flow.json"}],
   "data_to_collect": ["what site data should be collected and why"],
   "operation_steps": ["step-by-step backend actions to perform"],
   "required_outputs": ["points that final answer must cover"],
@@ -251,8 +301,13 @@ def _classify_task_with_model(message: str) -> Optional[dict]:
         model_email = ""
         requires_email = False
     tools = _normalize_plan_tools(parsed.get("tools") or [])
+    semantic_tools = _infer_site_task_tools(text, task_type, requires_email and bool(model_email))
+    for tool in semantic_tools:
+        if tool not in tools:
+            tools.append(tool)
     if requires_email and model_email and "email" not in tools:
         tools.append("email")
+    agent_route = _normalize_agent_route(parsed.get("agent_route") or [], tools, parsed.get("intent_reason") or text)
     if task_type == "chat":
         return {
             "task_type": "chat",
@@ -266,6 +321,7 @@ def _classify_task_with_model(message: str) -> Optional[dict]:
             "confidence": confidence,
             "planner": "model",
             "tools": [],
+            "agent_route": [],
             "data_to_collect": [],
             "operation_steps": [],
             "required_outputs": [],
@@ -285,6 +341,7 @@ def _classify_task_with_model(message: str) -> Optional[dict]:
         "confidence": confidence,
         "planner": "model",
         "tools": tools,
+        "agent_route": agent_route,
         "data_to_collect": [str(x) for x in (parsed.get("data_to_collect") or [])][:12],
         "operation_steps": [str(x) for x in (parsed.get("operation_steps") or [])][:12],
         "required_outputs": [str(x) for x in (parsed.get("required_outputs") or [])][:12],
@@ -557,6 +614,23 @@ def _run_site_report_task(job_id: str):
             task_type = JOBS.get(job_id, {}).get("task_type", "site_report")
         _update_job(job_id, "planning", "正在理解任务目标、选择站内工具和输出要求。", 1)
         agent_plan = plan_site_task(job_payload, task_type)
+        related_agents = [item.get("agent_id") for item in (agent_plan.get("agent_route") or []) if item.get("agent_id")]
+        agent_workspace.start_task(
+            "decision",
+            "site_ai_orchestration",
+            agent_plan.get("objective") or job_payload.get("title") or "站内AI总控任务",
+            payload={"job_id": job_id, "agent_plan": agent_plan},
+            task_id=f"site-ai-orchestrator-{job_id}",
+            related_agents=related_agents,
+        )
+        for route in agent_plan.get("agent_route") or []:
+            agent_workspace.record_event(
+                route.get("agent_id") or "data",
+                "assigned_by_site_ai",
+                f"总控已分配子任务：{route.get('objective') or agent_plan.get('objective')}",
+                payload={"job_id": job_id, "tools": route.get("tools") or [], "expected_output": route.get("expected_output")},
+            )
+        _write_artifact(job_id, "agent_plan.json", agent_plan)
 
         _update_job(job_id, "collecting", "正在按计划收集行情、板块、选股、AI推荐、持仓、新闻和风控信息。", 1)
         context = collect_site_context(agent_plan)
@@ -586,8 +660,18 @@ def _run_site_report_task(job_id: str):
             "email": mail_result,
             "ai_meta": ai_meta,
         }
+        agent_workspace.finish_task(
+            f"site-ai-orchestrator-{job_id}",
+            status="done",
+            message="站内AI总控任务已完成，Agent证据已汇总。",
+            result={"job_id": job_id, "summary": result.get("summary"), "agent_route": agent_plan.get("agent_route") or []},
+        )
         _finish_job(job_id, "done", "站内AI任务已完成。", result=result)
     except Exception as exc:
+        try:
+            agent_workspace.finish_task(f"site-ai-orchestrator-{job_id}", status="failed", message="站内AI总控任务失败。", error=str(exc))
+        except Exception:
+            pass
         _finish_job(job_id, "failed", f"站内AI任务失败：{exc}", error=str(exc))
 
 
@@ -599,6 +683,7 @@ def plan_site_task(job_payload: dict, task_type: str) -> dict:
         "objective": user_message or "完成站内AI任务",
         "answer_style": "direct",
         "tools": fallback_tools,
+        "agent_route": _normalize_agent_route([], fallback_tools, user_message),
         "required_outputs": ["直接回答用户问题", "原因和证据", "风险和替代方案"],
         "target_count": target_count,
         "no_answer_policy": "不能只拒绝；没有确定答案时给观察条件、次选方案或下一步执行路径。",
@@ -609,10 +694,14 @@ def plan_site_task(job_payload: dict, task_type: str) -> dict:
         initial_tools = _normalize_plan_tools(initial_intent.get("tools") or [])
         if not initial_tools:
             initial_tools = fallback_tools
+        for tool in fallback_tools:
+            if tool not in initial_tools:
+                initial_tools.append(tool)
         return {
             "objective": str(initial_intent.get("intent_reason") or user_message or fallback["objective"]),
             "answer_style": str(initial_intent.get("answer_style") or "direct"),
             "tools": initial_tools,
+            "agent_route": _normalize_agent_route(initial_intent.get("agent_route") or [], initial_tools, user_message),
             "required_outputs": [str(x) for x in (initial_intent.get("required_outputs") or fallback["required_outputs"])][:12],
             "target_count": max(1, min(10, _coerce_count(initial_intent.get("target_count"), target_count))),
             "no_answer_policy": str(initial_intent.get("no_answer_policy") or fallback["no_answer_policy"]),
@@ -637,11 +726,13 @@ def plan_site_task(job_payload: dict, task_type: str) -> dict:
         "target_count": target_count,
         "page": (job_payload or {}).get("page"),
         "active_strategy": (job_payload or {}).get("active_strategy"),
+        "available_agents": _agent_catalog_for_planner(),
     }
     schema = """{
   "objective": "一句话说明真实目标",
   "answer_style": "direct|report|brief",
   "tools": ["sectors"],
+  "agent_route": [{"agent_id": "capital", "tools": ["sector_money_flow"], "objective": "collect sector money-flow evidence", "expected_output": "capital_flow.json"}],
   "required_outputs": ["必须回答的要点"],
   "target_count": 3,
   "no_answer_policy": "没有确定答案时如何给替代方案",
@@ -656,10 +747,15 @@ def plan_site_task(job_payload: dict, task_type: str) -> dict:
     }]
     if not tools:
         tools = fallback_tools
+    for tool in fallback_tools:
+        if tool not in tools:
+            tools.append(tool)
+    agent_route = _normalize_agent_route(parsed.get("agent_route") or [], tools, parsed.get("objective") or user_message)
     return {
         "objective": str(parsed.get("objective") or fallback["objective"]),
         "answer_style": str(parsed.get("answer_style") or "direct"),
         "tools": tools,
+        "agent_route": agent_route,
         "required_outputs": [str(x) for x in (parsed.get("required_outputs") or fallback["required_outputs"])][:10],
         "target_count": max(1, min(10, _coerce_count(parsed.get("target_count"), target_count))),
         "no_answer_policy": str(parsed.get("no_answer_policy") or fallback["no_answer_policy"]),
@@ -719,7 +815,7 @@ def collect_site_context(agent_plan: Optional[dict] = None) -> dict:
     kill_switch = _call_with_timeout("kill_switch", get_kill_switch_status, {}) or {}
     strategy_memory = _call_with_timeout("strategy_memory", lambda: strategy_memory_service.get_model_memory_context("deep_analysis"), "") or ""
     system_state = _call_with_timeout("system_state", state_store.get_system_state, {}) or {}
-    return _json_safe({
+    context = {
         "generated_at": _now(),
         "universe_count": len(stock_universe),
         "realtime_count": len(realtime),
@@ -746,7 +842,55 @@ def collect_site_context(agent_plan: Optional[dict] = None) -> dict:
         "kill_switch": kill_switch,
         "strategy_memory": strategy_memory,
         "system_state": system_state,
-    })
+        "agent_route": agent_plan.get("agent_route") or _normalize_agent_route([], list(tools), agent_plan.get("objective") or ""),
+        "agent_tool_catalog": _agent_catalog_for_planner(),
+    }
+    context["agent_outputs"] = _build_agent_outputs(context, agent_plan)
+    return _json_safe(context)
+
+
+def _build_agent_outputs(context: dict, agent_plan: dict) -> list:
+    route = agent_plan.get("agent_route") or _normalize_agent_route([], agent_plan.get("tools") or [], agent_plan.get("objective") or "")
+    outputs = []
+    for item in route:
+        agent_id = item.get("agent_id")
+        evidence = {}
+        if agent_id == "data":
+            evidence = {
+                "universe_count": context.get("universe_count"),
+                "realtime_count": context.get("realtime_count"),
+                "daily_kline_count": context.get("daily_kline_count"),
+                "screening_source": context.get("screening_source"),
+            }
+        elif agent_id == "news":
+            evidence = {"news": (context.get("news") or [])[:8], "market_sentiment": context.get("market_sentiment")}
+        elif agent_id == "technical":
+            evidence = {"limit_moves": context.get("limit_moves"), "screening_top": (context.get("screening_top") or [])[:8]}
+        elif agent_id == "capital":
+            evidence = {"sector_rankings": (context.get("sector_rankings") or [])[:8], "limit_moves": context.get("limit_moves")}
+        elif agent_id == "sentiment":
+            evidence = {"market_sentiment": context.get("market_sentiment"), "limit_moves_counts": (context.get("limit_moves") or {}).get("counts")}
+        elif agent_id == "score":
+            evidence = {"investment_candidates": (context.get("investment_candidates") or [])[:10], "screening_top": (context.get("screening_top") or [])[:10]}
+        elif agent_id == "decision":
+            ai_recs = context.get("ai_recommendations") or {}
+            evidence = {"ai_recommendations": (ai_recs.get("recommendations") or [])[:8], "signals": (context.get("signals") or [])[:8]}
+        elif agent_id == "risk":
+            evidence = {"risk_status": context.get("risk_status"), "risk_config": context.get("risk_config"), "kill_switch": context.get("kill_switch")}
+        elif agent_id == "execution":
+            evidence = {"portfolio": context.get("portfolio"), "positions": context.get("positions"), "orders_tail": context.get("orders_tail")}
+        elif agent_id == "review":
+            evidence = {"strategy_memory": str(context.get("strategy_memory") or "")[:1200], "orders_tail": (context.get("orders_tail") or [])[-8:]}
+        else:
+            evidence = {"available": False}
+        outputs.append({
+            "agent_id": agent_id,
+            "objective": item.get("objective"),
+            "tools": item.get("tools") or [],
+            "expected_output": item.get("expected_output"),
+            "evidence": evidence,
+        })
+    return outputs
 
 
 def _collect_sector_rankings_for_task(limit: int = 12) -> list:
@@ -1013,6 +1157,7 @@ def summarize_site_context(context: dict, job_payload: dict, task_type: str) -> 
         "required_outputs": plan.get("required_outputs"),
         "no_answer_policy": plan.get("no_answer_policy"),
         "self_check": plan.get("self_check"),
+        "agent_route": plan.get("agent_route"),
     }
     if task_type == "investment_report":
         system_prompt = (
@@ -1132,6 +1277,7 @@ def _compact_context_for_ai_report(context: dict) -> dict:
         },
         "sector_rankings": (context.get("sector_rankings") or [])[:8],
         "limit_moves": context.get("limit_moves") or {},
+        "agent_outputs": (context.get("agent_outputs") or [])[:10],
         "market_sentiment": context.get("market_sentiment") or {},
         "news": (context.get("news") or [])[:8],
         "risk_status": context.get("risk_status") or {},
@@ -1160,6 +1306,7 @@ def _ultra_compact_context_for_ai_retry(context: dict) -> dict:
             "large_down": ((context.get("limit_moves") or {}).get("large_down") or [])[:5],
             "counts": (context.get("limit_moves") or {}).get("counts") or {},
         },
+        "agent_outputs": (context.get("agent_outputs") or [])[:8],
         "investment_candidates": (context.get("investment_candidates") or [])[:6],
         "ai_recommendations": {
             "recommendations": (ai_recs.get("recommendations") or [])[:5],
