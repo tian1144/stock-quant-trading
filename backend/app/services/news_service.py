@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List
 from loguru import logger
 
-from app.services import state_store, data_fetcher
+from app.services import state_store, data_fetcher, database_cache_service
 
 # 负面关键词
 NEGATIVE_KEYWORDS = [
@@ -67,6 +67,14 @@ def _prune_news(news: list, retention_days: int = NEWS_RETENTION_DAYS) -> list:
 
 
 def load_news_archive() -> list:
+    try:
+        db_news, db_meta = database_cache_service.list_news_cache(limit=2000, max_age_days=NEWS_RETENTION_DAYS)
+        if db_news:
+            meta = state_store.get_news_meta()
+            state_store.set_news_meta({**meta, **db_meta, "loaded_from_db_cache": True})
+            return db_news
+    except Exception as e:
+        logger.warning(f"读取数据库新闻缓存失败，尝试文件归档: {e}")
     if not os.path.exists(NEWS_ARCHIVE_PATH):
         return []
     try:
@@ -92,6 +100,10 @@ def write_news_archive(news: list, meta: dict | None = None):
         }
         with open(NEWS_ARCHIVE_PATH, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
+        try:
+            database_cache_service.upsert_news_cache(rows, payload["source_meta"])
+        except Exception as db_exc:
+            logger.warning(f"写入数据库新闻缓存失败: {db_exc}")
     except Exception as e:
         logger.warning(f"写入新闻缓存失败: {e}")
 

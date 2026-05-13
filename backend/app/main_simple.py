@@ -36,7 +36,7 @@ from app.services import (
     disclosure_service, strategy_memory_service, trade_review_service,
     ai_trustee_service, trading_calendar_service, auth_service, broker_service,
     sms_code_service, email_code_service, tencent_captcha_service, simple_cache,
-    site_task_assistant, persistence_service,
+    site_task_assistant, persistence_service, database_cache_service,
     knowledge_base_service, knowledge_answer_service, feishu_service
 )
 from app.backtest.engine import BacktestEngine, create_context_ma_crossover_strategy
@@ -78,18 +78,48 @@ SERVER_BOOT_ID = f"{os.getpid()}-{int(time.time())}"
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0'
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+DISABLE_BACKGROUND_LOOPS = _env_flag("LIANGHUA_DISABLE_BACKGROUND_LOOPS")
+ENABLE_AI_TRUSTEE_LOOP = _env_flag("LIANGHUA_ENABLE_AI_TRUSTEE_LOOP", not DISABLE_BACKGROUND_LOOPS)
+ENABLE_REALTIME_WATCH_LOOP = _env_flag("LIANGHUA_ENABLE_REALTIME_WATCH_LOOP", not DISABLE_BACKGROUND_LOOPS)
+ENABLE_POST_CLOSE_LOOP = _env_flag("LIANGHUA_ENABLE_POST_CLOSE_LOOP", not DISABLE_BACKGROUND_LOOPS)
+ENABLE_STOCK_UNIVERSE_LOOP = _env_flag("LIANGHUA_ENABLE_STOCK_UNIVERSE_LOOP", not DISABLE_BACKGROUND_LOOPS)
+ENABLE_MARKET_DATA_HUB_LOOP = _env_flag("LIANGHUA_ENABLE_MARKET_DATA_HUB_LOOP", not DISABLE_BACKGROUND_LOOPS)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期：启动时初始化量化系统"""
     logger.info("FastAPI 应用启动，正在初始化量化系统...")
     await trading_engine.startup_quant_system()
     agent_workspace.bootstrap_logs()
-    market_data_hub.start_hub()
-    ai_trustee_service.start_background_loop()
-    threading.Thread(target=_realtime_refresh_loop, daemon=True).start()
-    threading.Thread(target=_post_close_validation_loop, daemon=True).start()
-    threading.Thread(target=_stock_universe_monitor_loop, daemon=True).start()
-    threading.Thread(target=_market_data_hub_loop, daemon=True).start()
+    if ENABLE_MARKET_DATA_HUB_LOOP:
+        market_data_hub.start_hub()
+    if ENABLE_AI_TRUSTEE_LOOP:
+        ai_trustee_service.start_background_loop()
+    if ENABLE_REALTIME_WATCH_LOOP:
+        threading.Thread(target=_realtime_refresh_loop, daemon=True).start()
+    if ENABLE_POST_CLOSE_LOOP:
+        threading.Thread(target=_post_close_validation_loop, daemon=True).start()
+    if ENABLE_STOCK_UNIVERSE_LOOP:
+        threading.Thread(target=_stock_universe_monitor_loop, daemon=True).start()
+    if ENABLE_MARKET_DATA_HUB_LOOP:
+        threading.Thread(target=_market_data_hub_loop, daemon=True).start()
+    logger.info(
+        "后台循环状态: disable_all=%s ai_trustee=%s realtime_watch=%s post_close=%s stock_universe=%s market_data_hub=%s",
+        DISABLE_BACKGROUND_LOOPS,
+        ENABLE_AI_TRUSTEE_LOOP,
+        ENABLE_REALTIME_WATCH_LOOP,
+        ENABLE_POST_CLOSE_LOOP,
+        ENABLE_STOCK_UNIVERSE_LOOP,
+        ENABLE_MARKET_DATA_HUB_LOOP,
+    )
     yield
     logger.info("FastAPI 应用关闭")
 
@@ -1439,6 +1469,7 @@ async def get_market_cache_status():
         **data_fetcher.read_stock_universe_cache_meta(),
     }
     status["market_data_hub"] = {**market_data_hub.get_hub_status(), "runtime": _market_data_hub_job.copy()}
+    status["database_cache"] = database_cache_service.db_cache_status()
     return status
 
 
@@ -1647,6 +1678,14 @@ async def get_snapshot(stock_code: str):
     memory_cached = simple_cache.get(cache_key)
     if memory_cached is not None:
         return simple_cache.mark(memory_cached, True)
+    db_cached = database_cache_service.get_stock_cache(
+        "market_snapshot",
+        stock_code,
+        max_age_seconds=simple_cache.TTL_REALTIME_SECONDS,
+    )
+    if db_cached is not None:
+        simple_cache.set(cache_key, db_cached, simple_cache.TTL_REALTIME_SECONDS)
+        return simple_cache.mark(db_cached, True)
     try:
         cached = data_fetcher.read_realtime_cache(stock_code)
         if cached:
@@ -1673,6 +1712,14 @@ async def get_snapshot(stock_code: str):
                 "background_refresh": True,
             }
             simple_cache.set(cache_key, payload, simple_cache.TTL_REALTIME_SECONDS)
+            database_cache_service.upsert_stock_cache(
+                "market_snapshot",
+                stock_code,
+                payload,
+                ttl_seconds=simple_cache.TTL_REALTIME_SECONDS,
+                source=payload.get("source", ""),
+                status=payload.get("validation_status", "cache"),
+            )
             return simple_cache.mark(payload, False)
         verified = data_fetcher.fetch_verified_realtime_batch([stock_code]).get(stock_code)
         if verified:
@@ -1693,6 +1740,14 @@ async def get_snapshot(stock_code: str):
                 "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             }
             simple_cache.set(cache_key, payload, simple_cache.TTL_REALTIME_SECONDS)
+            database_cache_service.upsert_stock_cache(
+                "market_snapshot",
+                stock_code,
+                payload,
+                ttl_seconds=simple_cache.TTL_REALTIME_SECONDS,
+                source=payload.get("source", ""),
+                status=payload.get("validation_status", "verified"),
+            )
             return simple_cache.mark(payload, False)
         quote = _fetch_ths_quote(stock_code)
         if quote:
@@ -1706,6 +1761,14 @@ async def get_snapshot(stock_code: str):
                 "source": "同花顺",
             }
             simple_cache.set(cache_key, payload, simple_cache.TTL_REALTIME_SECONDS)
+            database_cache_service.upsert_stock_cache(
+                "market_snapshot",
+                stock_code,
+                payload,
+                ttl_seconds=simple_cache.TTL_REALTIME_SECONDS,
+                source=payload.get("source", ""),
+                status="ok",
+            )
             return simple_cache.mark(payload, False)
     except Exception as exc:
         logger.warning("market snapshot fetch failed for %s: %s", stock_code, exc)
@@ -1713,6 +1776,11 @@ async def get_snapshot(stock_code: str):
         if stale is not None:
             payload = simple_cache.mark(stale, True, stale=True)
             payload.setdefault("message", "行情源暂不可用，已返回最近一次缓存。")
+            return payload
+        db_stale = database_cache_service.get_stock_cache("market_snapshot", stock_code, allow_expired=True)
+        if db_stale is not None:
+            payload = simple_cache.mark(db_stale, True, stale=True)
+            payload.setdefault("message", "行情源暂不可用，已返回数据库最近一次缓存。")
             return payload
     return {"error": "获取行情数据失败", "message": "数据缺失", "cache": False}
 
@@ -2992,6 +3060,15 @@ async def get_stock_minutes(code: str):
     memory_cached = simple_cache.get(cache_key)
     if memory_cached is not None:
         return simple_cache.mark(memory_cached, True)
+    db_cached = database_cache_service.get_stock_cache(
+        "stock_minutes",
+        code,
+        params={"require_complete": require_complete},
+        max_age_seconds=simple_cache.TTL_INTRADAY_SECONDS,
+    )
+    if db_cached is not None:
+        simple_cache.set(cache_key, db_cached, simple_cache.TTL_INTRADAY_SECONDS)
+        return simple_cache.mark(db_cached, True)
     try:
         minutes = state_store.get_intraday(code)
         if not data_fetcher.intraday_minutes_valid(minutes, require_complete=require_complete):
@@ -3007,6 +3084,16 @@ async def get_stock_minutes(code: str):
             "message": "" if minutes else "分时数据缺失，已停止使用估算曲线。",
         }
         simple_cache.set(cache_key, payload, simple_cache.TTL_INTRADAY_SECONDS)
+        if minutes:
+            database_cache_service.upsert_stock_cache(
+                "stock_minutes",
+                code,
+                payload,
+                params={"require_complete": require_complete},
+                ttl_seconds=simple_cache.TTL_INTRADAY_SECONDS,
+                source=source or "unavailable",
+                status=payload.get("status", ""),
+            )
         return simple_cache.mark(payload, False)
     except Exception as exc:
         logger.warning("intraday minutes fetch failed for %s: %s", code, exc)
@@ -3014,6 +3101,16 @@ async def get_stock_minutes(code: str):
         if stale is not None:
             payload = simple_cache.mark(stale, True, stale=True)
             payload.setdefault("message", "分时数据源暂不可用，已返回最近一次缓存。")
+            return payload
+        db_stale = database_cache_service.get_stock_cache(
+            "stock_minutes",
+            code,
+            params={"require_complete": require_complete},
+            allow_expired=True,
+        )
+        if db_stale is not None:
+            payload = simple_cache.mark(db_stale, True, stale=True)
+            payload.setdefault("message", "分时数据源暂不可用，已返回数据库最近一次缓存。")
             return payload
         return {
             "code": code,
@@ -3036,6 +3133,16 @@ async def get_stock_kline(code: str, period: int = Query(101), days: int = Query
     memory_cached = simple_cache.get(cache_key)
     if memory_cached is not None:
         return simple_cache.mark(memory_cached, True)
+    db_cached = database_cache_service.get_stock_cache(
+        "stock_kline",
+        code,
+        period=period,
+        params={"days": int(days or 0)},
+        max_age_seconds=simple_cache.TTL_KLINE_SECONDS,
+    )
+    if db_cached is not None:
+        simple_cache.set(cache_key, db_cached, simple_cache.TTL_KLINE_SECONDS)
+        return simple_cache.mark(db_cached, True)
     df = data_fetcher._read_kline_cache(code, period, days)
     if int(period) == 101:
         realtime = data_fetcher.read_realtime_cache(code) or state_store.get_realtime(code) or {}
@@ -3052,6 +3159,17 @@ async def get_stock_kline(code: str, period: int = Query(101), days: int = Query
     if df is None:
         df = state_store.get_kline(code, period)
     if df is None:
+        db_stale = database_cache_service.get_stock_cache(
+            "stock_kline",
+            code,
+            period=period,
+            params={"days": int(days or 0)},
+            allow_expired=True,
+        )
+        if db_stale is not None:
+            payload = simple_cache.mark(db_stale, True, stale=True)
+            payload.setdefault("message", "K线数据源暂不可用，已返回数据库最近一次缓存。")
+            return payload
         payload = {
             "code": code,
             "period": period,
@@ -3096,6 +3214,17 @@ async def get_stock_kline(code: str, period: int = Query(101), days: int = Query
         payload["message"] = payload["message"] or "股票代码不存在或K线数据缺失。"
         payload["error"] = payload["message"]
     simple_cache.set(cache_key, payload, simple_cache.TTL_KLINE_SECONDS)
+    if klines:
+        database_cache_service.upsert_stock_cache(
+            "stock_kline",
+            code,
+            payload,
+            period=period,
+            params={"days": int(days or 0)},
+            ttl_seconds=simple_cache.TTL_KLINE_SECONDS,
+            source=payload.get("source", ""),
+            status=payload.get("status", ""),
+        )
     return simple_cache.mark(payload, False)
 
 
@@ -3115,6 +3244,10 @@ async def get_stock_detail(code: str):
     cached = _stock_detail_cache.get(code)
     if cached and time.time() - cached.get("updated_at", 0) < 8:
         return {**cached["payload"], "cache_hit": True}
+    db_cached = database_cache_service.get_stock_cache("stock_detail", code, max_age_seconds=60)
+    if db_cached is not None:
+        _stock_detail_cache[code] = {"updated_at": time.time(), "payload": db_cached}
+        return {**db_cached, "cache_hit": True}
 
     stock_info = state_store.get_stock_info(code) or {}
     if not stock_info:
@@ -3232,6 +3365,14 @@ async def get_stock_detail(code: str):
         ),
     })
     _stock_detail_cache[code] = {"updated_at": time.time(), "payload": payload}
+    database_cache_service.upsert_stock_cache(
+        "stock_detail",
+        code,
+        payload,
+        ttl_seconds=24 * 3600,
+        source=(realtime or {}).get("source", ""),
+        status="ok",
+    )
     return payload
 
 
@@ -3813,4 +3954,3 @@ async def deactivate_kill():
 async def get_kill_switch():
     """获取熔断开关状态"""
     return get_kill_switch_status()
-

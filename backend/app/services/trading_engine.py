@@ -3,6 +3,7 @@
 管理定时任务、自动交易、系统状态
 """
 import asyncio
+import os
 from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from loguru import logger
@@ -15,6 +16,18 @@ from app.services import (
 # 全局调度器
 _scheduler: AsyncIOScheduler = None
 _auto_trade_enabled: bool = False
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+DISABLE_BACKGROUND_LOOPS = _env_flag("LIANGHUA_DISABLE_BACKGROUND_LOOPS")
+DISABLE_STARTUP_DATA_INIT = _env_flag("LIANGHUA_DISABLE_STARTUP_DATA_INIT", DISABLE_BACKGROUND_LOOPS)
+DISABLE_SCHEDULER = _env_flag("LIANGHUA_DISABLE_SCHEDULER", DISABLE_BACKGROUND_LOOPS)
 
 
 async def startup_quant_system():
@@ -34,7 +47,10 @@ async def startup_quant_system():
         logger.info("使用默认组合状态（20万资金）")
 
     # 初始化数据（后台执行）
-    asyncio.create_task(_init_data())
+    if DISABLE_STARTUP_DATA_INIT:
+        logger.warning("启动数据初始化已通过环境变量关闭")
+    else:
+        asyncio.create_task(_init_data())
 
     logger.info("量化系统启动完成")
 
@@ -48,7 +64,10 @@ async def _init_data():
         logger.info("[初始化] 获取新闻...")
         await asyncio.to_thread(news_service.refresh_news)
 
-        _setup_scheduler()
+        if DISABLE_SCHEDULER:
+            logger.warning("定时任务调度器已通过环境变量关闭")
+        else:
+            _setup_scheduler()
 
         logger.info("[初始化] 轻量初始化完成！")
         logger.info(f"[初始化] 股票: {len(state_store.get_stock_universe())}只")
