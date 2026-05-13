@@ -1,0 +1,33 @@
+[Unit]
+Description=Lianghua Market Data Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/lianghua1/backend
+Environment=PYTHONUNBUFFERED=1
+Environment=LIANGHUA_MARKET_CACHE_DIR=/opt/lianghua1/backend/data/market_cache
+Environment=LIANGHUA_SQLITE_PATH=/opt/lianghua1/backend/data/lianghua_app.sqlite3
+Environment=LIANGHUA_WORKER_REALTIME_INTERVAL_SECONDS=15
+Environment=LIANGHUA_WORKER_INTRADAY_INTERVAL_SECONDS=180
+Environment=LIANGHUA_WORKER_UNIVERSE_INTERVAL_SECONDS=3600
+Environment=LIANGHUA_WORKER_REALTIME_BATCH_SIZE=5
+Environment=LIANGHUA_WORKER_FIRST_LIMIT=30
+Environment=LIANGHUA_WORKER_SECOND_LIMIT=30
+Environment=LIANGHUA_WORKER_THIRD_LIMIT=10
+Environment=LIANGHUA_WORKER_INTRADAY_FIRST_LIMIT=20
+Environment=LIANGHUA_WORKER_INTRADAY_SECOND_LIMIT=10
+Environment=LIANGHUA_WORKER_PER_CODE_DELAY_SECONDS=0.2
+Environment=LIANGHUA_WORKER_ENABLE_REALTIME=1
+Environment=LIANGHUA_WORKER_ENABLE_INTRADAY=1
+Environment=LIANGHUA_WORKER_ENABLE_UNIVERSE=0
+ExecStart=/opt/lianghua1/backend/venv/bin/python -m app.workers.market_worker
+Restart=always
+RestartSec=10
+Nice=10
+CPUQuota=35%
+MemoryMax=768M
+
+[Install]
+WantedBy=multi-user.target

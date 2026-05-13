@@ -74,9 +74,18 @@ def _today_key() -> str:
 def _write_json_cache(path: str, data):
     try:
         _ensure_dir(os.path.dirname(path))
-        with open(path, "w", encoding="utf-8") as f:
+        tmp_path = f"{path}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
     except Exception as e:
+        try:
+            if "tmp_path" in locals() and os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
         logger.warning(f"写入缓存失败 {path}: {e}")
 
 

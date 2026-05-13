@@ -73,6 +73,7 @@ STATIC_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "static")
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 BACKEND_ROOT = os.path.dirname(os.path.dirname(__file__))
 SCREENING_JOB_DIR = os.path.join(BACKEND_ROOT, "data", "jobs", "screening")
+MARKET_WORKER_STATUS_PATH = os.path.join(BACKEND_ROOT, "data", "jobs", "market_worker", "status.json")
 SERVER_BOOT_ID = f"{os.getpid()}-{int(time.time())}"
 
 UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 Edg/147.0.0.0'
@@ -1039,6 +1040,19 @@ def _track_realtime_code(code: str):
         _realtime_watch_codes.add(str(code))
 
 
+def _read_market_worker_status() -> dict:
+    try:
+        if not os.path.exists(MARKET_WORKER_STATUS_PATH):
+            return {"running": False, "status_path": MARKET_WORKER_STATUS_PATH, "message": "行情 worker 状态文件不存在"}
+        with open(MARKET_WORKER_STATUS_PATH, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        payload["running"] = payload.get("mode") not in {"stopped", "error"}
+        payload["status_path"] = MARKET_WORKER_STATUS_PATH
+        return payload
+    except Exception as exc:
+        return {"running": False, "status_path": MARKET_WORKER_STATUS_PATH, "message": f"读取行情 worker 状态失败：{exc}"}
+
+
 def _realtime_refresh_loop():
     _realtime_refresh_job.update({"running": True, "message": "实时行情 1 秒三源校验刷新中"})
     while True:
@@ -1470,7 +1484,14 @@ async def get_market_cache_status():
     }
     status["market_data_hub"] = {**market_data_hub.get_hub_status(), "runtime": _market_data_hub_job.copy()}
     status["database_cache"] = database_cache_service.db_cache_status()
+    status["market_worker"] = _read_market_worker_status()
     return status
+
+
+@app.get("/api/v1/market/worker/status")
+async def get_market_worker_status():
+    """独立行情 worker 状态。"""
+    return _read_market_worker_status()
 
 
 @app.get("/api/v1/market/data-hub/status")
