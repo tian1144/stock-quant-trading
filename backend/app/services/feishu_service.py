@@ -11,7 +11,7 @@ from typing import Any
 
 import requests
 
-from app.services import knowledge_answer_service, knowledge_base_service
+from app.services import feishu_answer_service, knowledge_base_service
 
 
 FEISHU_API_BASE = "https://open.feishu.cn/open-apis"
@@ -114,7 +114,7 @@ def _handle_message_async(payload: dict) -> None:
     if not chat_id or not question:
         return
     try:
-        result = knowledge_answer_service.answer_from_knowledge(question)
+        result = feishu_answer_service.answer_for_feishu(question)
         answer = result.get("answer") or knowledge_base_service.NO_ANSWER_TEXT
         _send_text(chat_id, answer)
         knowledge_base_service.record_feishu_log(
